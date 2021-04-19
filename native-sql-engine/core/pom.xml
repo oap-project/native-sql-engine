@@ -44,7 +44,7 @@
     <nativesql.cpp_tests>${cpp_tests}</nativesql.cpp_tests>
     <nativesql.build_arrow>OFF</nativesql.build_arrow>
     <nativesql.static_arrow>${static_arrow}</nativesql.static_arrow>
-    <nativesql.arrow.bfs.install.dir>${project.basedir}/../../arrow-data-source/common/script/build/arrow_install</nativesql.arrow.bfs.install.dir>
+    <nativesql.arrow.bfs.install.dir>${project.basedir}/../../arrow-data-source/script/build/arrow_install</nativesql.arrow.bfs.install.dir>
     <nativesql.arrow_root>${arrow_root}</nativesql.arrow_root>
     <nativesql.build_protobuf>${build_protobuf}</nativesql.build_protobuf>
   </properties>
@@ -322,6 +322,11 @@
           </executions>
       </plugin>
       <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-resources-plugin</artifactId>
+          <version>3.0.1</version>
+      </plugin>
+      <plugin>
         <groupId>net.alchim31.maven</groupId>
         <artifactId>scala-maven-plugin</artifactId>
         <executions>
@@ -383,7 +388,7 @@
         <version>1.0.0</version>
         <configuration>
           <verbose>false</verbose>
-          <failOnViolation>true</failOnViolation>
+          <failOnViolation>false</failOnViolation>
           <includeTestSourceDirectory>true</includeTestSourceDirectory>
           <failOnWarning>false</failOnWarning>
           <sourceDirectory>${project.basedir}/src/main/scala</sourceDirectory>

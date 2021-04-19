@@ -118,3 +118,16 @@ jobs:
         clang-format-version: '10'
         check-path: 'native-sql-engine/cpp/src'
         fallback-style: 'Google' # optional
+
+  scala-formatting-check:
+    name: Scala Formatting Check
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: setup JDK
+      uses: actions/setup-java@v2
+      with:
+        java-version: '11'
+        distribution: 'adopt'
+    - name: check maven style
+      run: mvn --batch-mode --update-snapshots verify
