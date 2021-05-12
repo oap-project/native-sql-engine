@@ -18,15 +18,12 @@
 package com.intel.oap.expression
 
 import com.google.common.collect.Lists
-
 import org.apache.arrow.gandiva.evaluator._
 import org.apache.arrow.gandiva.exceptions.GandivaException
 import org.apache.arrow.gandiva.expression._
 import org.apache.arrow.vector.types.pojo.ArrowType
-import org.apache.arrow.vector.types.FloatingPointPrecision
+import org.apache.arrow.vector.types.{DateUnit, FloatingPointPrecision, TimeUnit}
 import org.apache.arrow.vector.types.pojo.Field
-import org.apache.arrow.vector.types.DateUnit
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.optimizer._
@@ -439,7 +436,7 @@ class ColumnarCast(
           s"${child.dataType} is not supported in castFLOAT8")
       }
     } else if (dataType == DateType) {
-      val supported = List(IntegerType, LongType, DateType)
+      val supported = List(IntegerType, LongType, DateType, TimestampType)
       if (supported.indexOf(child.dataType) == -1) {
         throw new UnsupportedOperationException(s"${child.dataType} is not supported in castDATE")
       }
@@ -449,6 +446,11 @@ class ColumnarCast(
           !child.dataType.isInstanceOf[DecimalType]) {
         throw new UnsupportedOperationException(
           s"${child.dataType} is not supported in castDECIMAL")
+      }
+    } else if (datatype == TimestampType) {
+      val supported = List(LongType)
+      if (supported.indexOf(child.dataType) == -1) {
+        throw new UnsupportedOperationException(s"${child.dataType} is not supported in castTIMESTAMP")
       }
     } else {
       throw new UnsupportedOperationException(s"not currently supported: ${dataType}.")
@@ -530,9 +532,21 @@ class ColumnarCast(
         TreeBuilder.makeFunction("castFLOAT8", Lists.newArrayList(child_node), resultType)
       (funcNode, resultType)
     } else if (dataType == DateType) {
-      val funcNode =
+      val castNode = if (childType.isInstanceOf[ArrowType.Timestamp]) {
+        val timestampMSType = new ArrowType.Timestamp(TimeUnit.MILLISECOND, CodeGeneration.timeZoneId)
+        // cast timestamp(us) => timestamp(ms)
+        val timestampMSNode =
+          TreeBuilder.makeFunction("convertTimestampUnit", Lists.newArrayList(child_node), timestampMSType)
+        // cast timestamp(ms) => date64
+        val funcNode =
+          TreeBuilder.makeFunction("castDATE", Lists.newArrayList(timestampMSNode), new ArrowType.Date(DateUnit.MILLISECOND))
+        // cast date64 => date32
+        TreeBuilder.makeFunction("castDATE", Lists.newArrayList(funcNode), resultType)
+      } else {
         TreeBuilder.makeFunction("castDATE", Lists.newArrayList(child_node), resultType)
-      (funcNode, resultType)
+      }
+
+      (castNode, resultType)
     } else if (dataType.isInstanceOf[DecimalType]) {
       dataType match {
         case d: DecimalType =>
@@ -541,6 +555,15 @@ class ColumnarCast(
             TreeBuilder.makeFunction("castDECIMAL", Lists.newArrayList(child_node), dType)
           (funcNode, dType)
       }
+    } else if (dataType == TimestampType) {
+      val timestampMSType = new ArrowType.Timestamp(TimeUnit.MILLISECOND, CodeGeneration.timeZoneId)
+      // cast date64 => timestamp(ms)
+      val timestampMSNode =
+        TreeBuilder.makeFunction("castTIMESTAMP", Lists.newArrayList(child_node), timestampMSType)
+      // cast timestamp(ms) => timestamp(us)
+      val funcNode =
+        TreeBuilder.makeFunction("convertTimestampUnit", Lists.newArrayList(timestampMSNode), resultType)
+      (funcNode, resultType)
     } else {
       throw new UnsupportedOperationException(s"not currently supported: ${dataType}.")
     }

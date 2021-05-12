@@ -70,12 +70,37 @@ class ColumnarDateAddInterval(start: Expression, interval: Expression, original:
   }
 }
 
+class ColumnarUnixTimestamp(timeExp: Expression, format: Expression, original: UnixTimestamp)
+  extends UnixTimestamp(timeExp, format, original.timeZoneId)
+    with ColumnarExpression
+    with Logging {
+  override def doColumnarCodeGen(args: Object): (TreeNode, ArrowType) = {
+    var (timeExp_node, timeExp_type): (TreeNode, ArrowType) =
+      timeExp.asInstanceOf[ColumnarExpression].doColumnarCodeGen(args)
+    var (format_node, format_type): (TreeNode, ArrowType) =
+      format.asInstanceOf[ColumnarExpression].doColumnarCodeGen(args)
+
+    if (timeExp_type.isInstanceOf[ArrowType.Date]) {
+      val limitLen: java.lang.Long = 10L
+      val limitLenNode = TreeBuilder.makeLiteral(limitLen)
+      timeExp_node =
+        TreeBuilder.makeFunction("castVARCHAR", Lists.newArrayList(timeExp_node, limitLenNode), ArrowType.Utf8.INSTANCE)
+    }
+    val resultType = new ArrowType.Date(DateUnit.MILLISECOND)
+    val castNode =
+      TreeBuilder.makeFunction("to_date", Lists.newArrayList(timeExp_node, format_node), resultType)
+    (castNode, resultType)
+  }
+}
+
 object ColumnarBinaryExpression {
 
   def create(left: Expression, right: Expression, original: Expression): Expression =
     original match {
       case s: DateAddInterval =>
         new ColumnarDateAddInterval(left, right, s)
+      case u: UnixTimestamp =>
+        new ColumnarUnixTimestamp(left, right, u)
       case other =>
         throw new UnsupportedOperationException(s"not currently supported: $other.")
     }
