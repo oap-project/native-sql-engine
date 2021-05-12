@@ -113,6 +113,46 @@ class ColumnarIsNull(child: Expression, original: Expression)
   }
 }
 
+class ColumnarHour(child: Expression, original: Expression)
+  extends Hour(child: Expression)
+    with ColumnarExpression
+    with Logging {
+
+  buildCheck()
+
+  def buildCheck(): Unit = {
+    val supportedTypes = List(LongType, StringType, DateType, TimestampType)
+    if (supportedTypes.indexOf(child.dataType) == -1) {
+      throw new UnsupportedOperationException(
+        s"${child.dataType} is not supported in ColumnarHour.")
+    }
+  }
+
+  override def doColumnarCodeGen(args: java.lang.Object): (TreeNode, ArrowType) = {
+    val (child_node, childType): (TreeNode, ArrowType) =
+      child.asInstanceOf[ColumnarExpression].doColumnarCodeGen(args)
+
+    val resultType = new ArrowType.Int(32, true)
+    //FIXME(): requires utf8()/int64() as input
+
+    val offsetNode = if (child.prettyName.equals("columnarcast")) {
+      TreeBuilder.makeLiteral(0.asInstanceOf[Integer])
+    } else {
+      val timezone = childType.asInstanceOf[ArrowType.Timestamp].getTimezone
+      val offset = java.util.TimeZone.getTimeZone(timezone).getOffset(System.currentTimeMillis())
+      TreeBuilder.makeLiteral(offset.asInstanceOf[Integer])
+    }
+    val funcNode =
+      TreeBuilder.makeFunction(
+        "extractTimestampHour",
+        Lists.newArrayList(child_node, offsetNode),
+        new ArrowType.Int(64, true))
+    val castNode =
+      TreeBuilder.makeFunction("castINT", Lists.newArrayList(funcNode), resultType)
+    (castNode, resultType)
+  }
+}
+
 class ColumnarMonth(child: Expression, original: Expression)
     extends Month(child: Expression)
     with ColumnarExpression
@@ -439,7 +479,7 @@ class ColumnarCast(
           s"${child.dataType} is not supported in castFLOAT8")
       }
     } else if (dataType == DateType) {
-      val supported = List(IntegerType, LongType, DateType)
+      val supported = List(IntegerType, LongType, DateType, StringType, TimestampType)
       if (supported.indexOf(child.dataType) == -1) {
         throw new UnsupportedOperationException(s"${child.dataType} is not supported in castDATE")
       }
@@ -449,6 +489,12 @@ class ColumnarCast(
           !child.dataType.isInstanceOf[DecimalType]) {
         throw new UnsupportedOperationException(
           s"${child.dataType} is not supported in castDECIMAL")
+      }
+    } else  if (datatype == TimestampType) {
+      val supported = List(DateType, StringType)
+      if (supported.indexOf(child.dataType) == -1) {
+        throw new UnsupportedOperationException(
+          s"${child.dataType} is not supported in castTimeStamp")
       }
     } else {
       throw new UnsupportedOperationException(s"not currently supported: ${dataType}.")
@@ -530,8 +576,14 @@ class ColumnarCast(
         TreeBuilder.makeFunction("castFLOAT8", Lists.newArrayList(child_node), resultType)
       (funcNode, resultType)
     } else if (dataType == DateType) {
-      val funcNode =
+      val funcNode = if (childType.isInstanceOf[ArrowType.Timestamp]) {
+        val timezone = childType.asInstanceOf[ArrowType.Timestamp].getTimezone
+        val offset = java.util.TimeZone.getTimeZone(timezone).getOffset(System.currentTimeMillis())
+        val offsetNode = TreeBuilder.makeLiteral(offset.asInstanceOf[Integer])
+        TreeBuilder.makeFunction("castDATE", Lists.newArrayList(child_node, offsetNode), resultType)
+      } else {
         TreeBuilder.makeFunction("castDATE", Lists.newArrayList(child_node), resultType)
+      }
       (funcNode, resultType)
     } else if (dataType.isInstanceOf[DecimalType]) {
       dataType match {
@@ -541,7 +593,17 @@ class ColumnarCast(
             TreeBuilder.makeFunction("castDECIMAL", Lists.newArrayList(child_node), dType)
           (funcNode, dType)
       }
-    } else {
+    } else if (datatype == TimestampType) {
+      val funcNode = if (childType.isInstanceOf[ArrowType.Date]) {
+        // cast date32 to date64
+        val cast_func = TreeBuilder.makeFunction("castDATE",
+          Lists.newArrayList(child_node), new ArrowType.Date(DateUnit.MILLISECOND))
+        TreeBuilder.makeFunction("castTimeStamp", Lists.newArrayList(cast_func), resultType)
+      } else {
+        TreeBuilder.makeFunction("castTimeStamp", Lists.newArrayList(child_node), resultType)
+      }
+      (funcNode, resultType)
+    }  else {
       throw new UnsupportedOperationException(s"not currently supported: ${dataType}.")
     }
   }
@@ -661,6 +723,8 @@ object ColumnarUnaryOperator {
       new ColumnarMonth(child, m)
     case d: DayOfMonth =>
       new ColumnarDayOfMonth(child, d)
+    case h: Hour =>
+      new ColumnarHour(child, h)
     case n: Not =>
       new ColumnarNot(child, n)
     case a: Abs =>
