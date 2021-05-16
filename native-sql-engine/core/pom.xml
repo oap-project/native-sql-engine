@@ -365,6 +365,24 @@
         </executions>
       </plugin>
       <plugin>
+        <groupId>org.antipathy</groupId>
+        <artifactId>mvn-scalafmt_2.12</artifactId>
+        <version>0.10_1.3.0</version>
+        <configuration>
+            <configLocation>${project.basedir}/../../.scalafmt.conf</configLocation>
+            <parameters>${scalafmt.parameters}</parameters>
+            <skip>${scalafmt.skip}</skip>
+            <skipSources>${scalafmt.skip}</skipSources>
+             <onlyChangedFiles>true</onlyChangedFiles>
+            <sourceDirectories>
+              <param>${project.basedir}/src/main/scala</param>
+            </sourceDirectories>
+            <testSourceDirectories>
+              <param>${project.basedir}/src/test/scala</param>
+            </testSourceDirectories>
+        </configuration>
+      </plugin>
+      <plugin>
         <groupId>org.scalastyle</groupId>
         <artifactId>scalastyle-maven-plugin</artifactId>
         <version>1.0.0</version>
