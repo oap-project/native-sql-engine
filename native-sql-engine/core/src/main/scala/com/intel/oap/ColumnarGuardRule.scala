@@ -25,7 +25,7 @@ import org.apache.spark.sql.{SparkSession, SparkSessionExtensions}
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.catalyst.plans.FullOuter
+import org.apache.spark.sql.catalyst.plans.{FullOuter, LeftSemi}
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive._
 import org.apache.spark.sql.execution.aggregate.HashAggregateExec
@@ -206,6 +206,10 @@ case class ColumnarGuardRule() extends Rule[SparkPlan] {
       case plan: ShuffledHashJoinExec =>
         if ((count + 1) >= optimizeLevel) return true
         plan.children.map(existsMultiCodegens(_, count + 1)).exists(_ == true)
+      //TODO(): a fix for q95
+      case plan: SortMergeJoinExec if plan.joinType == LeftSemi =>
+        if ((count + 1) >= optimizeLevel) return true
+        plan.children.map(existsMultiCodegens(_, count + 1)).exists(_ == true)
       case other => false
     }
 
@@ -225,6 +229,9 @@ case class ColumnarGuardRule() extends Rule[SparkPlan] {
       case p: BroadcastExchangeExec =>
         RowGuard(p.withNewChildren(p.children.map(insertRowGuardOrNot)))
       case p: ShuffledHashJoinExec =>
+        RowGuard(p.withNewChildren(p.children.map(insertRowGuardRecursive)))
+      //TODO(): a fix for q95
+      case p: SortMergeJoinExec =>
         RowGuard(p.withNewChildren(p.children.map(insertRowGuardRecursive)))
       case p if !supportCodegen(p) =>
         // insert row guard them recursively
