@@ -355,6 +355,9 @@ arrow::Status ExprVisitor::MakeExprVisitorImpl(
     } else if (child_func_name.compare("hashAggregateArrays") == 0) {
       RETURN_NOT_OK(
           HashAggregateArraysImpl::Make(field_list, func_node, ret_fields, p, &impl_));
+    } else if (child_func_name.compare(0, 21, "conditionedJoinArrays") == 0) {
+      RETURN_NOT_OK(
+          MergeJoinArraysVisitorImpl::Make(field_list, func_node, ret_fields, p, &impl_));
     }
     goto finish;
   }

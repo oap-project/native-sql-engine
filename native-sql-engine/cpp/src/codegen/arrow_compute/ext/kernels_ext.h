@@ -498,6 +498,45 @@ class ConditionedProbeKernel : public KernalBase {
   std::unique_ptr<Impl> impl_;
   arrow::compute::ExecContext* ctx_ = nullptr;
 };
+
+class ConditionedJoinKernel : public KernalBase {
+ public:
+  static arrow::Status Make(arrow::compute::ExecContext* ctx,
+                            const gandiva::NodeVector& left_key_list,
+                            const gandiva::NodeVector& right_key_list,
+                            const gandiva::NodeVector& left_schema_list,
+                            const gandiva::NodeVector& right_schema_list,
+                            const gandiva::NodePtr& condition, int join_type,
+                            const gandiva::NodeVector& result_schema,
+                            const gandiva::NodeVector& hash_configuration_list,
+                            int hash_relation_idx, std::shared_ptr<KernalBase>* out);
+  ConditionedJoinKernel(arrow::compute::ExecContext* ctx,
+                         const gandiva::NodeVector& left_key_list,
+                         const gandiva::NodeVector& right_key_list,
+                         const gandiva::NodeVector& left_schema_list,
+                         const gandiva::NodeVector& right_schema_list,
+                         const gandiva::NodePtr& condition, int join_type,
+                         const gandiva::NodeVector& result_schema,
+                         const gandiva::NodeVector& hash_configuration_list,
+                         int hash_relation_idx);
+
+  arrow::Status Evaluate(const ArrayList& in) override;
+  arrow::Status MakeResultIterator(
+      std::shared_ptr<arrow::Schema> schema,
+      std::shared_ptr<ResultIterator<arrow::RecordBatch>>* out) override;
+  arrow::Status DoCodeGen(
+      int level,
+      std::vector<std::pair<std::pair<std::string, std::string>, gandiva::DataTypePtr>>
+          input,
+      std::shared_ptr<CodeGenContext>* codegen_ctx_out, int* var_id) override;
+  std::string GetSignature() override;
+  class Impl;
+
+ private:
+  std::unique_ptr<Impl> impl_;
+  arrow::compute::ExecContext* ctx_;
+};
+
 class ConditionedMergeJoinKernel : public KernalBase {
  public:
   static arrow::Status Make(arrow::compute::ExecContext* ctx,
