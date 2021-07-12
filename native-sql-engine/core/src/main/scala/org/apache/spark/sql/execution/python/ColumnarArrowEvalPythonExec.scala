@@ -163,14 +163,24 @@ class ColumnarArrowPythonRunner(
           val loader = new VectorLoader(root)
           val writer = new ArrowStreamWriter(root, null, dataOut)
           writer.start()
+//          var lastBatch: ColumnarBatch = null
           while (inputIterator.hasNext) {
             val nextBatch = inputIterator.next()
+//            if (lastBatch != null) {
+//              (0 until lastBatch.numCols).toList.foreach(i =>
+//                logWarning(s"last refCnt: " +
+//                  s"${lastBatch.column(i).asInstanceOf[ArrowWritableColumnVector].refCnt()}"))
+//            }
+//            (0 until nextBatch.numCols).toList.foreach(i =>
+//              logWarning(s"next refCnt: " +
+//                s"${nextBatch.column(i).asInstanceOf[ArrowWritableColumnVector].refCnt()}"))
+//            lastBatch = nextBatch
             numRows += nextBatch.numRows
             val next_rb = ConverterUtils.createArrowRecordBatch(nextBatch)
             loader.load(next_rb)
             writer.writeBatch()
             ConverterUtils.releaseArrowRecordBatch(next_rb)
-          }            
+          }
           // end writes footer to the output stream and doesn't clean any resources.
           // It could throw exception if the output stream is closed, so it should be
           // in the try block.
@@ -347,9 +357,13 @@ case class ColumnarArrowEvalPythonExec(udfs: Seq[PythonUDF], resultAttrs: Seq[At
         outputColumnarBatchIterator.zipWithIndex.map { case (output_cb, batchId) =>
           val input_cb = input_cb_cache(batchId)
           // retain for input_cb since we are passing it to next operator
-          (0 until input_cb.numCols).foreach(i => {
+//          (0 until input_cb.numCols).toList.foreach(i =>
+//            logWarning(s"before retain refCnt: ${input_cb.column(i).asInstanceOf[ArrowWritableColumnVector].refCnt()}"))
+          (0 until input_cb.numCols).toList.foreach(i => {
             input_cb.column(i).asInstanceOf[ArrowWritableColumnVector].retain()
           })
+//          (0 until input_cb.numCols).toList.foreach(i =>
+//            logWarning(s"after retain refCnt: ${input_cb.column(i).asInstanceOf[ArrowWritableColumnVector].refCnt()}"))
           val joinedVectors = (0 until input_cb.numCols).toArray.map(i => input_cb.column(i)) ++ (0 until output_cb.numCols).toArray.map(i => output_cb.column(i))
           val numRows = input_cb.numRows
           numOutputBatches += 1

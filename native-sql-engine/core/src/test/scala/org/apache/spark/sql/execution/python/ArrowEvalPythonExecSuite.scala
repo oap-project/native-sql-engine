@@ -39,7 +39,7 @@ class ArrowEvalPythonExecSuite extends QueryTest with SharedSparkSession {
   val pyarrowTestUDF = TestScalarPandasUDF(name = "pyarrowUDF")
 
   lazy val base = Seq(
-    (1, 1), (1, 2), (2, 1), (2, 2), 
+    (1, 1), (1, 2), (2, 1), (2, 2),
     (3, 1), (3, 2), (0, 1), (3, 0)).toDF("a", "b")
 
   test("arrow_udf test") {

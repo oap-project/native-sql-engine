@@ -17,6 +17,7 @@
 
 package com.intel.oap.execution
 
+import com.intel.oap.vectorized.ArrowWritableColumnVector
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
@@ -69,6 +70,8 @@ case class ColumnarInMemoryTableScanExec(
     relation.cacheBuilder.serializer
       .convertCachedBatchToColumnarBatch(buffers, relation.output, attributes, conf)
       .map { cb =>
+//        (0 until cb.numCols).toList.foreach(i =>
+//          logWarning(s"refCnt: ${cb.column(i).asInstanceOf[ArrowWritableColumnVector].refCnt()}"))
         numOutputRows += cb.numRows()
         cb
       }
