@@ -46,7 +46,7 @@ class KernalBase {
   }
   virtual arrow::Status Evaluate(arrow::RecordBatchIterator in) {
     return arrow::Status::NotImplemented("Evaluate is abstract interface for ",
-                                         kernel_name_, ", input is interator.");
+                                         kernel_name_, ", input is iterator.");
   }
   virtual arrow::Status Evaluate(const ArrayList& in, ArrayList* out) {
     return arrow::Status::NotImplemented("Evaluate is abstract interface for ",
