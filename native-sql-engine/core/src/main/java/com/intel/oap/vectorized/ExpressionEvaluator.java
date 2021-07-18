@@ -19,6 +19,7 @@ package com.intel.oap.vectorized;
 
 import com.intel.oap.ColumnarPluginConfig;
 import com.intel.oap.spark.sql.execution.datasources.v2.arrow.Spiller;
+import org.apache.arrow.dataset.jni.NativeSerializedRecordBatchIterator;
 import org.apache.arrow.memory.ArrowBuf;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -140,6 +141,12 @@ public class ExpressionEvaluator implements AutoCloseable {
    */
   public ArrowRecordBatch[] evaluate(ArrowRecordBatch recordBatch) throws RuntimeException, IOException {
     return evaluate(recordBatch, null);
+  }
+
+  public void evaluate(NativeSerializedRecordBatchIterator batchItr)
+          throws RuntimeException, IOException {
+    jniWrapper.nativeEvaluateWithIterator(nativeHandler,
+        batchItr);
   }
 
   /**

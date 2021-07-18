@@ -139,7 +139,7 @@ class ConditionedMergeJoinKernel::Impl {
         auto relation_col_name = relation_col_name_ss.str();
         auto relation_col_type = field_list[idx][i]->type();
         sort_define_ss << "std::shared_ptr<"
-                       << GetTemplateString(relation_col_type, "TypedRelationColumn",
+                       << GetTemplateString(relation_col_type, "TypedLazyLoadRelationColumn",
                                             "Type", "arrow::")
                        << "> " << relation_col_name << ";" << std::endl;
         sort_define_ss << "bool " << relation_col_name << "_has_null;" << std::endl;

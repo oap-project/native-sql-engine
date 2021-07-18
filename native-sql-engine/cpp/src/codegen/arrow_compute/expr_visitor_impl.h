@@ -591,11 +591,8 @@ class CachedRelationVisitorImpl : public ExprVisitorImpl {
   arrow::Status Eval() override {
     switch (p_->dependency_result_type_) {
       case ArrowComputeResultType::None: {
-        std::vector<std::shared_ptr<arrow::Array>> col_list;
-        for (auto col : p_->in_record_batch_->columns()) {
-          col_list.push_back(col);
-        }
-        RETURN_NOT_OK(kernel_->Evaluate(col_list));
+
+        RETURN_NOT_OK(kernel_->Evaluate(std::move(p_->in_iterator_)));
       } break;
       default:
         return arrow::Status::NotImplemented(
@@ -802,7 +799,7 @@ class ConditionedJoinArraysVisitorImpl : public ExprVisitorImpl {
         for (int i = 0; i < p_->in_record_batch_->num_columns(); i++) {
           in.push_back(p_->in_record_batch_->column(i));
         }
-        TIME_MICRO_OR_RAISE(p_->elapse_time_, kernel_->Evaluate(in));
+        TIME_MICRO_OR_RAISE(p_->elapse_time_, kernel_->Evaluate(std::move(p_->in_iterator_)));
       } break;
       default:
         return arrow::Status::NotImplemented(

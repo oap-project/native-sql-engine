@@ -36,39 +36,90 @@ using sparkcolumnarplugin::precompile::TypeTraits;
 class SortRelation {
  public:
   SortRelation(
-      arrow::compute::ExecContext* ctx, uint64_t items_total,
-      const std::vector<int>& size_array,
+      arrow::compute::ExecContext* ctx,
+      std::shared_ptr<LazyBatchIterator> lazy_in,
       const std::vector<std::shared_ptr<RelationColumn>>& sort_relation_key_list,
       const std::vector<std::shared_ptr<RelationColumn>>& sort_relation_payload_list)
-      : ctx_(ctx), items_total_(items_total) {
+      : ctx_(ctx) {
+    lazy_in_ = lazy_in;
     sort_relation_key_list_ = sort_relation_key_list;
     sort_relation_payload_list_ = sort_relation_payload_list;
-    int64_t buf_size = items_total_ * sizeof(ArrayItemIndexS);
-    auto maybe_buffer = arrow::AllocateBuffer(buf_size, ctx_->memory_pool());
-    indices_buf_ = *std::move(maybe_buffer);
-    indices_begin_ = reinterpret_cast<ArrayItemIndexS*>(indices_buf_->mutable_data());
-    uint64_t idx = 0;
-    int array_id = 0;
-    for (auto size : size_array) {
-      for (int id = 0; id < size; id++) {
-        indices_begin_[idx].array_id = array_id;
-        indices_begin_[idx].id = id;
-        idx++;
-      }
-      array_id++;
-    }
-
-    std::shared_ptr<arrow::FixedSizeBinaryType> out_type;
   }
 
-  ~SortRelation() {}
+  ~SortRelation() = default;
+
+  void Advance(int shift) {
+    std::shared_ptr<arrow::RecordBatch> batch = lazy_in_->GetBatch(requested_batches);
+    int64_t batch_length = batch->num_rows();
+    int64_t batch_remaining = (batch_length - 1) - offset_in_current_batch_;
+    if (shift <= batch_remaining) {
+      offset_in_current_batch_ = offset_in_current_batch_ + shift;
+      return;
+    }
+    int64_t remaining = shift - batch_remaining;
+    int32_t batch_i = requested_batches + 1;
+    while (true) {
+      std::shared_ptr<arrow::RecordBatch> b = lazy_in_->GetBatch(batch_i);
+      int64_t current_batch_length = batch->num_rows();
+      if (remaining <= current_batch_length) {
+        requested_batches = batch_i;
+        offset_in_current_batch_ = remaining - 1;
+        return;
+      }
+      remaining -= current_batch_length;
+      batch_i++;
+    }
+  }
 
   ArrayItemIndexS GetItemIndexWithShift(int shift) {
-    return indices_begin_[offset_ + shift];
+    std::shared_ptr<arrow::RecordBatch> batch = lazy_in_->GetBatch(requested_batches);
+    int64_t batch_length = batch->num_rows();
+    int64_t batch_remaining = (batch_length - 1) - offset_in_current_batch_;
+    if (shift <= batch_remaining) {
+      ArrayItemIndexS s(requested_batches, offset_in_current_batch_ + shift);
+      return s;
+    }
+    int64_t remaining = shift - batch_remaining;
+    int32_t batch_i = requested_batches + 1;
+    while (true) {
+      std::shared_ptr<arrow::RecordBatch> b = lazy_in_->GetBatch(batch_i);
+      int64_t current_batch_length = batch->num_rows();
+      if (remaining <= current_batch_length) {
+        ArrayItemIndexS s(batch_i, remaining - 1);
+        return s;
+      }
+      remaining -= current_batch_length;
+      batch_i++;
+    }
+  }
+
+  bool CheckRangeBound(int shift) {
+    std::shared_ptr<arrow::RecordBatch> batch = lazy_in_->GetBatch(requested_batches);
+    if (batch == nullptr) {
+      return false;
+    }
+    int64_t batch_length = batch->num_rows();
+    int64_t batch_remaining = (batch_length - 1) - offset_in_current_batch_;
+    if (shift <= batch_remaining) {
+      return true;
+    }
+    int64_t remaining = shift - batch_remaining;
+    int32_t batch_i = requested_batches + 1;
+    while (remaining >= 0) {
+      std::shared_ptr<arrow::RecordBatch> b = lazy_in_->GetBatch(batch_i);
+      if (b == nullptr) {
+        return false;
+      }
+      int64_t current_batch_length = batch->num_rows();
+      remaining -= current_batch_length;
+      batch_i++;
+    }
+    return true;
   }
 
   bool Next() {
     if (!CheckRangeBound(1)) return false;
+    Advance(1);
     offset_++;
     range_cache_ = -1;
     return true;
@@ -77,16 +128,16 @@ class SortRelation {
   bool NextNewKey() {
     auto range = GetSameKeyRange();
     if (!CheckRangeBound(range)) return false;
+    Advance(range);
     offset_ += range;
     range_cache_ = -1;
-
     return true;
   }
 
   int GetSameKeyRange() {
     if (range_cache_ != -1) return range_cache_;
+    if (!CheckRangeBound(0)) return 0;
     int range = 0;
-    if (!CheckRangeBound(range)) return range;
     bool is_same = true;
     while (is_same) {
       if (CheckRangeBound(range + 1)) {
@@ -108,8 +159,6 @@ class SortRelation {
     return range;
   }
 
-  bool CheckRangeBound(int shift) { return offset_ + shift < items_total_; }
-
   template <typename T>
   arrow::Status GetColumn(int idx, std::shared_ptr<T>* out) {
     *out = std::dynamic_pointer_cast<T>(sort_relation_payload_list_[idx]);
@@ -118,10 +167,10 @@ class SortRelation {
 
  protected:
   arrow::compute::ExecContext* ctx_;
-  std::shared_ptr<arrow::Buffer> indices_buf_;
-  ArrayItemIndexS* indices_begin_;
-  const uint64_t items_total_;
+  std::shared_ptr<LazyBatchIterator> lazy_in_;
   uint64_t offset_ = 0;
+  int64_t offset_in_current_batch_ = 0;
+  int32_t requested_batches = 0;
   int range_cache_ = -1;
   std::vector<std::shared_ptr<RelationColumn>> sort_relation_key_list_;
   std::vector<std::shared_ptr<RelationColumn>> sort_relation_payload_list_;

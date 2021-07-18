@@ -153,6 +153,13 @@ class ArrowComputeCodeGenerator : public CodeGenerator {
     return status;
   }
 
+  arrow::Status evaluate(arrow::RecordBatchIterator in) override {
+    for (auto visitor : visitor_list_) {
+      TIME_MICRO_OR_RAISE(eval_elapse_time_, visitor->Eval(std::move(in)));
+    }
+    return arrow::Status::OK();
+  };
+
   arrow::Status evaluate(const std::shared_ptr<arrow::Array>& selection_in,
                          const std::shared_ptr<arrow::RecordBatch>& in,
                          std::vector<std::shared_ptr<arrow::RecordBatch>>* out) {

@@ -339,30 +339,20 @@ class CachedRelationKernel::Impl {
     col_num_ = result_schema->num_fields();
   }
 
-  arrow::Status Evaluate(const ArrayList& in) {
-    items_total_ += in[0]->length();
-    length_list_.push_back(in[0]->length());
-    if (cached_.size() < col_num_) {
-      cached_.resize(col_num_);
-    }
-    for (int i = 0; i < col_num_; i++) {
-      cached_[i].push_back(in[i]);
-    }
+  arrow::Status Evaluate(arrow::RecordBatchIterator in) {
+    in_ = std::move(in);
     return arrow::Status::OK();
   }
 
   arrow::Status MakeResultIterator(std::shared_ptr<arrow::Schema> schema,
                                    std::shared_ptr<ResultIterator<SortRelation>>* out) {
     std::vector<std::shared_ptr<RelationColumn>> sort_relation_list;
+    std::shared_ptr<LazyBatchIterator> lazy_in = std::make_shared<LazyBatchIterator>(std::move(in_));
     int idx = 0;
     for (auto field : result_schema_->fields()) {
       std::shared_ptr<RelationColumn> col_out;
-      RETURN_NOT_OK(MakeRelationColumn(field->type()->id(), &col_out));
-      if (cached_.size() == col_num_) {
-        for (auto arr : cached_[idx]) {
-          RETURN_NOT_OK(col_out->AppendColumn(arr));
-        }
-      }
+      RETURN_NOT_OK(MakeLazyLoadRelationColumn(field->type()->id(), &col_out));
+      RETURN_NOT_OK(col_out->FromLazyBatchIterator(lazy_in, idx));
       sort_relation_list.push_back(col_out);
       idx++;
     }
@@ -371,7 +361,7 @@ class CachedRelationKernel::Impl {
       key_relation_list.push_back(sort_relation_list[key_id]);
     }
     auto sort_relation = std::make_shared<SortRelation>(
-        ctx_, items_total_, length_list_, key_relation_list, sort_relation_list);
+        ctx_, lazy_in, key_relation_list, sort_relation_list);
     *out = std::make_shared<SortRelationResultIterator>(sort_relation);
     return arrow::Status::OK();
   }
@@ -385,10 +375,8 @@ class CachedRelationKernel::Impl {
   std::vector<std::shared_ptr<arrow::Field>> key_field_list_;
   std::shared_ptr<arrow::Schema> result_schema_;
 
+  arrow::RecordBatchIterator in_;
   std::vector<int> key_index_list_;
-  std::vector<int> length_list_;
-  std::vector<arrow::ArrayVector> cached_;
-  uint64_t items_total_ = 0;
 
   class SortRelationResultIterator : public ResultIterator<SortRelation> {
    public:
@@ -420,8 +408,8 @@ CachedRelationKernel::CachedRelationKernel(
   kernel_name_ = "CachedRelationKernel";
 }
 
-arrow::Status CachedRelationKernel::Evaluate(const ArrayList& in) {
-  return impl_->Evaluate(in);
+arrow::Status CachedRelationKernel::Evaluate(arrow::RecordBatchIterator in) {
+  return impl_->Evaluate(std::move(in));
 }
 
 arrow::Status CachedRelationKernel::MakeResultIterator(

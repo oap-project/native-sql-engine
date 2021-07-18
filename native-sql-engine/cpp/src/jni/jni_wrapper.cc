@@ -25,12 +25,15 @@
 #include <arrow/pretty_print.h>
 #include <arrow/record_batch.h>
 #include <arrow/util/compression.h>
+#include <arrow/util/iterator.h>
+#include <arrow/jniutil/jni_util.h> // todo dynamic link libarrow_dataset_jni.so
 #include <jni.h>
 #include <malloc.h>
 
 #include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "codegen/code_generator_factory.h"
 #include "codegen/common/hash_relation.h"
@@ -59,8 +62,12 @@ static jmethodID serializable_obj_builder_constructor;
 static jclass split_result_class;
 static jmethodID split_result_constructor;
 
+jclass serialized_record_batch_iterator_class;
 static jclass metrics_builder_class;
 static jmethodID metrics_builder_constructor;
+
+jmethodID serialized_record_batch_iterator_hasNext;
+jmethodID serialized_record_batch_iterator_next;
 
 using arrow::jni::ConcurrentMap;
 static ConcurrentMap<std::shared_ptr<arrow::Buffer>> buffer_holder_;
@@ -100,6 +107,42 @@ template <typename T>
 std::shared_ptr<ResultIterator<T>> GetBatchIterator(JNIEnv* env, jlong id) {
   auto handler = GetBatchIterator(env, id);
   return std::dynamic_pointer_cast<ResultIterator<T>>(handler);
+}
+
+
+arrow::Result<std::shared_ptr<arrow::RecordBatch>> FromBytes(
+    JNIEnv* env, std::shared_ptr<arrow::Schema> schema, jbyteArray bytes) {
+  ARROW_ASSIGN_OR_RAISE(
+      std::shared_ptr<arrow::RecordBatch> batch,
+      arrow::jniutil::DeserializeUnsafeFromJava(env, schema, bytes))
+  return batch;
+}
+
+// See Java class
+// org/apache/arrow/dataset/jni/NativeSerializedRecordBatchIterator
+//
+arrow::Result<arrow::RecordBatchIterator> MakeJavaRecordBatchIterator(
+    JavaVM* vm, jobject java_serialized_record_batch_iterator,
+    std::shared_ptr<arrow::Schema> schema) {
+  std::shared_ptr<arrow::Schema> schema_moved = std::move(schema);
+  arrow::RecordBatchIterator itr = arrow::MakeFunctionIterator(
+      [vm, java_serialized_record_batch_iterator,
+          schema_moved]() -> arrow::Result<std::shared_ptr<arrow::RecordBatch>> {
+        JNIEnv* env;
+        if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION) != JNI_OK) {
+          return arrow::Status::Invalid("JNIEnv was not attached to current thread");
+        }
+        if (!env->CallBooleanMethod(java_serialized_record_batch_iterator,
+                                    serialized_record_batch_iterator_hasNext)) {
+          return nullptr;  // stream ended
+        }
+        auto bytes = (jbyteArray)env->CallObjectMethod(
+            java_serialized_record_batch_iterator, serialized_record_batch_iterator_next);
+        RETURN_NOT_OK(arrow::jniutil::CheckException(env));
+        ARROW_ASSIGN_OR_RAISE(auto batch, FromBytes(env, schema_moved, bytes));
+        return batch;
+      });
+  return itr;
 }
 
 jobject MakeRecordBatchBuilder(JNIEnv* env, std::shared_ptr<arrow::Schema> schema,
@@ -199,6 +242,15 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved) {
   metrics_builder_constructor =
       GetMethodID(env, metrics_builder_class, "<init>", "([J[J)V");
 
+  serialized_record_batch_iterator_class =
+      CreateGlobalClassReference(env,
+                                 "Lorg/apache/arrow/"
+                                 "dataset/jni/NativeSerializedRecordBatchIterator;");
+  serialized_record_batch_iterator_hasNext =
+      GetMethodID(env, serialized_record_batch_iterator_class, "hasNext", "()Z");
+  serialized_record_batch_iterator_next =
+      GetMethodID(env, serialized_record_batch_iterator_class, "next", "()[B");
+
   return JNI_VERSION;
 }
 
@@ -217,6 +269,7 @@ void JNI_OnUnload(JavaVM* vm, void* reserved) {
   env->DeleteGlobalRef(arrow_record_batch_builder_class);
   env->DeleteGlobalRef(serializable_obj_builder_class);
   env->DeleteGlobalRef(split_result_class);
+  env->DeleteGlobalRef(serialized_record_batch_iterator_class);
 
   buffer_holder_.Clear();
   handler_holder_.Clear();
@@ -472,6 +525,40 @@ Java_com_intel_oap_vectorized_ExpressionEvaluatorJniWrapper_nativeEvaluate(
   env->ReleaseLongArrayElements(buf_sizes, in_buf_sizes, JNI_ABORT);
 
   return record_batch_builder_array;
+}
+
+JNIEXPORT void JNICALL
+Java_com_intel_oap_vectorized_ExpressionEvaluatorJniWrapper_nativeEvaluateWithIterator(
+    JNIEnv* env, jobject obj, jlong id, jobject itr) {
+  JavaVM* vm;
+  if (env->GetJavaVM(&vm) != JNI_OK) {
+    std::string error_message =
+        "Unable to get JavaVM instance";
+    env->ThrowNew(io_exception_class, error_message.c_str());
+  }
+  arrow::Status status;
+  std::shared_ptr<CodeGenerator> handler = GetCodeGenerator(env, id);
+  std::shared_ptr<arrow::Schema> schema;
+  status = handler->getSchema(&schema);
+
+  // IMPORTANT: DO NOT USE LOCAL REF IN DIFFERENT THREAD
+  // TODO Release this in JNI Unload or dependent object's destructor
+  jobject itr2 = env->NewGlobalRef(itr);
+  arrow::Result<arrow::RecordBatchIterator> rb_itr_status = MakeJavaRecordBatchIterator(vm, itr2, schema);
+
+  if (!rb_itr_status.ok()) {
+    std::string error_message =
+        "nativeEvaluate: error making java iterator" + rb_itr_status.status().ToString();
+    env->ThrowNew(io_exception_class, error_message.c_str());
+  }
+
+  status = handler->evaluate(std::move(rb_itr_status.ValueOrDie()));
+
+  if (!status.ok()) {
+    std::string error_message =
+        "nativeEvaluate: evaluate failed with error msg " + status.ToString();
+    env->ThrowNew(io_exception_class, error_message.c_str());
+  }
 }
 
 JNIEXPORT jstring JNICALL

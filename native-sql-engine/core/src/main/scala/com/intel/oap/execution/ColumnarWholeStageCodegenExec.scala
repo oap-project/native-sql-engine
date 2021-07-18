@@ -17,12 +17,15 @@
 
 package com.intel.oap.execution
 
+import java.util.concurrent.TimeUnit.NANOSECONDS
+
 import com.google.common.collect.Lists
 import com.intel.oap.ColumnarPluginConfig
 import com.intel.oap.expression._
 import com.intel.oap.vectorized.{BatchIterator, ExpressionEvaluator, _}
 import org.apache.arrow.gandiva.expression._
 import org.apache.arrow.vector.types.pojo.{ArrowType, Field, Schema}
+
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, SortOrder}
@@ -33,9 +36,12 @@ import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ColumnVector, ColumnarBatch}
 import org.apache.spark.util.{ExecutorManager, UserAddedJarUtils}
-
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ListBuffer
+
+import org.apache.arrow.dataset.jni.NativeSerializedRecordBatchIterator
+import org.apache.arrow.dataset.jni.UnsafeRecordBatchSerializer
+import org.apache.arrow.vector.ipc.message.ArrowRecordBatch
 
 case class ColumnarCodegenContext(inputSchema: Schema, outputSchema: Schema, root: TreeNode) {}
 
@@ -287,6 +293,7 @@ case class ColumnarWholeStageCodegenExec(child: SparkPlan)(val codegenStageId: I
     var idx = 0
     var curRDD = inputRDDs()(0)
     while (idx < buildPlans.length) {
+
       val curPlan = buildPlans(idx)._1
       val parentPlan = buildPlans(idx)._2
 
@@ -405,17 +412,34 @@ case class ColumnarWholeStageCodegenExec(child: SparkPlan)(val codegenStageId: I
               Lists.newArrayList(expression),
               outputSchema,
               true)
-            while (depIter.hasNext) {
-              val dep_cb = depIter.next()
-              if (dep_cb.numRows > 0) {
-                (0 until dep_cb.numCols).toList.foreach(i =>
-                  dep_cb.column(i).asInstanceOf[ArrowWritableColumnVector].retain())
-                buildRelationBatchHolder += dep_cb
-                val dep_rb = ConverterUtils.createArrowRecordBatch(dep_cb)
-                cachedRelationKernel.evaluate(dep_rb)
-                ConverterUtils.releaseArrowRecordBatch(dep_rb)
+
+            // Used as ABI to prevent from serializing buffer data
+            val serializedItr: NativeSerializedRecordBatchIterator = {
+              new NativeSerializedRecordBatchIterator {
+
+                override def hasNext: Boolean = {
+                  depIter.hasNext
+                }
+
+                override def next(): Array[Byte] = {
+                  val dep_cb = depIter.next()
+                  if (dep_cb.numRows > 0) {
+                    val dep_rb = ConverterUtils.createArrowRecordBatch(dep_cb)
+                    serialize(dep_rb)
+                  } else {
+                    throw new IllegalStateException()
+                  }
+                }
+
+                private def serialize(batch: ArrowRecordBatch) = {
+                  UnsafeRecordBatchSerializer.serializeUnsafe(batch)
+                }
+
+                override def close(): Unit = {
+                }
               }
             }
+            cachedRelationKernel.evaluate(serializedItr)
             dependentKernels += cachedRelationKernel
             val beforeEval = System.nanoTime()
             dependentKernelIterators += cachedRelationKernel.finishByIterator()
@@ -568,7 +592,7 @@ case class ColumnarWholeStageCodegenExec(child: SparkPlan)(val codegenStageId: I
       def close = {
         closed = true
         pipelineTime += (eval_elapse + build_elapse) / 1000000
-        buildRelationBatchHolder.foreach(_.close)
+        buildRelationBatchHolder.foreach(_.close) // fixing: ref cnt goes nagative
         dependentKernels.foreach(_.close)
         dependentKernelIterators.foreach(_.close)
         nativeKernel.close
