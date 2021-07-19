@@ -45,8 +45,16 @@ class LazyBatchIterator {
       }
       cache_.push_back(next);
       ref_cnts_.push_back(0);
+      row_cnts_.push_back(next->num_rows());
     }
     return cache_[batch_id];
+  }
+
+  int64_t GetNumRowsOfBatch(int32_t batch_id) {
+    if (batch_id >= row_cnts_.size()) {
+      return -1L;
+    }
+    return row_cnts_[batch_id];
   }
 
   void RetainBatch(int32_t batch_id) {
@@ -64,6 +72,7 @@ class LazyBatchIterator {
   arrow::RecordBatchIterator in_;
   std::vector<std::shared_ptr<arrow::RecordBatch>> cache_;
   std::vector<int32_t> ref_cnts_;
+  std::vector<int64_t> row_cnts_;
   int32_t current_batch_id_ = 0;
 };
 

@@ -49,8 +49,7 @@ class SortRelation {
   ~SortRelation() = default;
 
   void Advance(int shift) {
-    std::shared_ptr<arrow::RecordBatch> batch = lazy_in_->GetBatch(requested_batches);
-    int64_t batch_length = batch->num_rows();
+    int64_t batch_length = lazy_in_->GetNumRowsOfBatch(requested_batches);
     int64_t batch_remaining = (batch_length - 1) - offset_in_current_batch_;
     if (shift <= batch_remaining) {
       offset_in_current_batch_ = offset_in_current_batch_ + shift;
@@ -59,8 +58,7 @@ class SortRelation {
     int64_t remaining = shift - batch_remaining;
     int32_t batch_i = requested_batches + 1;
     while (true) {
-      std::shared_ptr<arrow::RecordBatch> b = lazy_in_->GetBatch(batch_i);
-      int64_t current_batch_length = batch->num_rows();
+      int64_t current_batch_length = lazy_in_->GetNumRowsOfBatch(batch_i);
       if (remaining <= current_batch_length) {
         requested_batches = batch_i;
         offset_in_current_batch_ = remaining - 1;
@@ -72,8 +70,7 @@ class SortRelation {
   }
 
   ArrayItemIndexS GetItemIndexWithShift(int shift) {
-    std::shared_ptr<arrow::RecordBatch> batch = lazy_in_->GetBatch(requested_batches);
-    int64_t batch_length = batch->num_rows();
+    int64_t batch_length = lazy_in_->GetNumRowsOfBatch(requested_batches);
     int64_t batch_remaining = (batch_length - 1) - offset_in_current_batch_;
     if (shift <= batch_remaining) {
       ArrayItemIndexS s(requested_batches, offset_in_current_batch_ + shift);
@@ -82,8 +79,7 @@ class SortRelation {
     int64_t remaining = shift - batch_remaining;
     int32_t batch_i = requested_batches + 1;
     while (true) {
-      std::shared_ptr<arrow::RecordBatch> b = lazy_in_->GetBatch(batch_i);
-      int64_t current_batch_length = batch->num_rows();
+      int64_t current_batch_length = lazy_in_->GetNumRowsOfBatch(batch_i);
       if (remaining <= current_batch_length) {
         ArrayItemIndexS s(batch_i, remaining - 1);
         return s;
@@ -94,11 +90,10 @@ class SortRelation {
   }
 
   bool CheckRangeBound(int shift) {
-    std::shared_ptr<arrow::RecordBatch> batch = lazy_in_->GetBatch(requested_batches);
-    if (batch == nullptr) {
+    int64_t batch_length = lazy_in_->GetNumRowsOfBatch(requested_batches);
+    if (batch_length == -1L) {
       return false;
     }
-    int64_t batch_length = batch->num_rows();
     int64_t batch_remaining = (batch_length - 1) - offset_in_current_batch_;
     if (shift <= batch_remaining) {
       return true;
@@ -106,11 +101,10 @@ class SortRelation {
     int64_t remaining = shift - batch_remaining;
     int32_t batch_i = requested_batches + 1;
     while (remaining >= 0) {
-      std::shared_ptr<arrow::RecordBatch> b = lazy_in_->GetBatch(batch_i);
-      if (b == nullptr) {
+      int64_t current_batch_length = lazy_in_->GetNumRowsOfBatch(batch_i);
+      if (current_batch_length == -1L) {
         return false;
       }
-      int64_t current_batch_length = batch->num_rows();
       remaining -= current_batch_length;
       batch_i++;
     }
