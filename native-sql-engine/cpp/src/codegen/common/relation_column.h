@@ -38,20 +38,27 @@ class LazyBatchIterator {
   }
 
   std::shared_ptr<arrow::RecordBatch> GetBatch(int32_t batch_id) {
+    if (!Advance(batch_id)) {
+      return nullptr;
+    }
+    return cache_[batch_id];
+  }
+
+  bool Advance(int32_t batch_id) {
     for (; current_batch_id_ <= batch_id; current_batch_id_++) {
       std::shared_ptr<arrow::RecordBatch> next = in_.Next().ValueOrDie();
       if (next == nullptr) {
-        return nullptr;
+        return false;
       }
       cache_.push_back(next);
       ref_cnts_.push_back(0);
       row_cnts_.push_back(next->num_rows());
     }
-    return cache_[batch_id];
+    return true;
   }
 
   int64_t GetNumRowsOfBatch(int32_t batch_id) {
-    if (batch_id >= row_cnts_.size()) {
+    if (!Advance(batch_id)) {
       return -1L;
     }
     return row_cnts_[batch_id];
