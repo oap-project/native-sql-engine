@@ -2398,6 +2398,8 @@ TEST(TestArrowComputeWSCG, JoinWOCGTestStringInnerJoinType2LoadHashRelation) {
   ////////////////////// evaluate //////////////////////
   for (auto batch : table_0) {
     ASSERT_NOT_OK(expr_build_pre->evaluate(batch, &dummy_result_batches));
+  }
+  for (auto batch : table_0) {
     ASSERT_NOT_OK(expr_build->evaluate(batch, &dummy_result_batches));
   }
   std::shared_ptr<ResultIteratorBase> build_result_iterator_base_pre;

@@ -26,6 +26,7 @@ import java.nio.channels.Channels;
 import java.util.List;
 
 import org.apache.arrow.dataset.jni.NativeMemoryPool;
+import org.apache.arrow.dataset.jni.UnsafeRecordBatchSerializer;
 import org.apache.arrow.gandiva.evaluator.SelectionVectorInt16;
 import org.apache.arrow.gandiva.exceptions.GandivaException;
 import org.apache.arrow.gandiva.expression.ExpressionTree;
@@ -140,6 +141,25 @@ public class ExpressionEvaluator implements AutoCloseable {
    */
   public ArrowRecordBatch[] evaluate(ArrowRecordBatch recordBatch) throws RuntimeException, IOException {
     return evaluate(recordBatch, null);
+  }
+
+  /**
+   * Evaluate input data using builded native function, and output as recordBatch.
+   */
+  public ArrowRecordBatch[] evaluate2(ArrowRecordBatch recordBatch) throws RuntimeException, IOException {
+    byte[] bytes = UnsafeRecordBatchSerializer.serializeUnsafe(recordBatch);
+    ArrowRecordBatchBuilder[] resRecordBatchBuilderList = jniWrapper.nativeEvaluate2(nativeHandler, bytes);
+    ArrowRecordBatch[] recordBatchList = new ArrowRecordBatch[resRecordBatchBuilderList.length];
+    for (int i = 0; i < resRecordBatchBuilderList.length; i++) {
+      if (resRecordBatchBuilderList[i] == null) {
+        recordBatchList[i] = null;
+        break;
+      }
+      ArrowRecordBatchBuilderImpl resRecordBatchBuilderImpl = new ArrowRecordBatchBuilderImpl(
+          resRecordBatchBuilderList[i]);
+      recordBatchList[i] = resRecordBatchBuilderImpl.build();
+    }
+    return recordBatchList;
   }
 
   /**

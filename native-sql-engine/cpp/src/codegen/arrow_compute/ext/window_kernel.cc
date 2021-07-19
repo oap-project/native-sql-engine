@@ -105,7 +105,7 @@ WindowAggregateFunctionKernel::WindowAggregateFunctionKernel(
  * | 3 |     1 |   |     1 |   3 |          |      3 |
  * | 6 |     0 |                            |      8 |
  */
-arrow::Status WindowAggregateFunctionKernel::Evaluate(const ArrayList& in) {
+arrow::Status WindowAggregateFunctionKernel::Evaluate(ArrayList& in) {
   // abstract following code to do common inter-window processing
 
   int32_t max_group_id = 0;
@@ -292,7 +292,7 @@ arrow::Status WindowRankKernel::Make(
   return arrow::Status::OK();
 }
 
-arrow::Status WindowRankKernel::Evaluate(const ArrayList& in) {
+arrow::Status WindowRankKernel::Evaluate(ArrayList& in) {
   input_cache_.push_back(in);
   return arrow::Status::OK();
 }

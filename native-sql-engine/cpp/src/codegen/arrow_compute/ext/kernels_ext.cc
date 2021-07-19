@@ -339,7 +339,7 @@ class CachedRelationKernel::Impl {
     col_num_ = result_schema->num_fields();
   }
 
-  arrow::Status Evaluate(const ArrayList& in) {
+  arrow::Status Evaluate(ArrayList& in) {
     items_total_ += in[0]->length();
     length_list_.push_back(in[0]->length());
     if (cached_.size() < col_num_) {
@@ -420,7 +420,7 @@ CachedRelationKernel::CachedRelationKernel(
   kernel_name_ = "CachedRelationKernel";
 }
 
-arrow::Status CachedRelationKernel::Evaluate(const ArrayList& in) {
+arrow::Status CachedRelationKernel::Evaluate(ArrayList& in) {
   return impl_->Evaluate(in);
 }
 

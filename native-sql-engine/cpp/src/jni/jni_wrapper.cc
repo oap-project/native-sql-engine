@@ -21,6 +21,7 @@
 #include <arrow/io/memory.h>
 #include <arrow/ipc/api.h>
 #include <arrow/ipc/dictionary.h>
+#include <arrow/jniutil/jni_util.h>
 #include <arrow/memory_pool.h>
 #include <arrow/pretty_print.h>
 #include <arrow/record_batch.h>
@@ -993,6 +994,46 @@ Java_com_intel_oap_vectorized_ShuffleSplitterJniWrapper_nativeSpill(
     return -1L;
   }
   return spilled_size;
+}
+
+arrow::Result<std::shared_ptr<arrow::RecordBatch>> FromBytes(
+    JNIEnv* env, std::shared_ptr<arrow::Schema> schema, jbyteArray bytes) {
+  ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::RecordBatch> batch,
+                        arrow::jniutil::DeserializeUnsafeFromJava(env, schema, bytes))
+  return batch;
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_intel_oap_vectorized_ExpressionEvaluatorJniWrapper_nativeEvaluate2(
+    JNIEnv* env, jobject obj, jlong id, jbyteArray bytes) {
+  arrow::Status status;
+  std::shared_ptr<CodeGenerator> handler = GetCodeGenerator(env, id);
+  std::shared_ptr<arrow::Schema> schema;
+  status = handler->getSchema(&schema);
+
+  auto maybe_batch = FromBytes(env, schema, bytes);
+  auto in = std::move(*maybe_batch);
+
+  std::vector<std::shared_ptr<arrow::RecordBatch>> out;
+  status = handler->evaluate(in, &out);
+
+  if (!status.ok()) {
+    std::string error_message =
+        "nativeEvaluate: evaluate failed with error msg " + status.ToString();
+    env->ThrowNew(io_exception_class, error_message.c_str());
+  }
+
+  std::shared_ptr<arrow::Schema> res_schema;
+  status = handler->getResSchema(&res_schema);
+  jobjectArray record_batch_builder_array =
+      env->NewObjectArray(out.size(), arrow_record_batch_builder_class, nullptr);
+  int i = 0;
+  for (auto record_batch : out) {
+    jobject record_batch_builder = MakeRecordBatchBuilder(env, res_schema, record_batch);
+    env->SetObjectArrayElement(record_batch_builder_array, i++, record_batch_builder);
+  }
+
+  return record_batch_builder_array;
 }
 
 JNIEXPORT jlong JNICALL

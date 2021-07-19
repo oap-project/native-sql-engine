@@ -17,6 +17,11 @@
 
 #include <arrow/array/concatenate.h>
 #include <arrow/compute/api.h>
+#include <arrow/filesystem/filesystem.h>
+#include <arrow/filesystem/localfs.h>
+#include <arrow/filesystem/path_util.h>
+#include <arrow/io/file.h>
+#include <arrow/ipc/api.h>
 #include <arrow/type.h>
 #include <arrow/type_fwd.h>
 #include <arrow/type_traits.h>
@@ -24,6 +29,8 @@
 #include <gandiva/projector.h>
 
 #include <algorithm>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -179,13 +186,10 @@ class SortArraysToIndicesKernel::Impl {
     return arrow::Status::OK();
   }
 
-  virtual arrow::Status Evaluate(const ArrayList& in) {
+  virtual arrow::Status Evaluate(ArrayList& in) {
     num_batches_++;
     if (cached_.size() <= col_num_) {
       cached_.resize(col_num_ + 1);
-    }
-    for (int i = 0; i < col_num_; i++) {
-      cached_[i].push_back(in[i]);
     }
     if (!key_projector_) {
       ArrayList key_cols;
@@ -204,6 +208,18 @@ class SortArraysToIndicesKernel::Impl {
     }
     items_total_ += in[0]->length();
     length_list_.push_back(in[0]->length());
+
+    for (int i = 0; i < col_num_; i++) {
+      cached_[i].push_back(in[i]);
+    }
+
+    return arrow::Status::OK();
+  }
+
+  virtual arrow::Status Spill(int64_t* spilled_size) {
+    // do spill
+    local_result_iter_->SortResultSpill();
+
     return arrow::Status::OK();
   }
 
@@ -212,7 +228,9 @@ class SortArraysToIndicesKernel::Impl {
       std::shared_ptr<ResultIterator<arrow::RecordBatch>>* out) {
     std::shared_ptr<FixedSizeBinaryArray> indices_out;
     RETURN_NOT_OK(sorter_->FinishInternal(&indices_out));
-    *out = std::make_shared<SorterResultIterator>(ctx_, schema, indices_out, cached_);
+    local_result_iter_ = std::make_shared<SorterResultIterator>(ctx_, schema, indices_out,
+                                                                std::move(cached_));
+    *out = local_result_iter_;
     return arrow::Status::OK();
   }
 
@@ -226,28 +244,144 @@ class SortArraysToIndicesKernel::Impl {
   virtual arrow::Status Finish(std::shared_ptr<arrow::Array>* out) {
     return arrow::Status::OK();
   }
+
   std::string GetSignature() { return signature_; }
 
- protected:
-  std::shared_ptr<CodeGenBase> sorter_;
-  std::vector<arrow::ArrayVector> cached_;
-  arrow::compute::ExecContext* ctx_;
-  std::string signature_;
-  std::vector<int> key_index_list_;
-  std::shared_ptr<arrow::Schema> result_schema_;
-  std::shared_ptr<gandiva::Projector> key_projector_;
-  std::vector<std::shared_ptr<arrow::DataType>> projected_types_;
-  std::vector<std::shared_ptr<arrow::Field>> projected_field_list_;
-  std::vector<std::shared_ptr<arrow::Field>> key_field_list_;
-  std::vector<int64_t> length_list_;
-  uint64_t num_batches_ = 0;
-  uint64_t items_total_ = 0;
-  // true for asc, false for desc
-  std::vector<bool> sort_directions_;
-  // true for nulls_first, false for nulls_last
-  std::vector<bool> nulls_order_;
-  bool NaN_check_;
-  int col_num_ = 0;
+  // TODO: move this class into common utility
+  class SpillableCacheStore {
+   public:
+    SpillableCacheStore(std::vector<arrow::ArrayVector>& cached,
+                        std::shared_ptr<arrow::Schema> result_schema)
+        : cached_(cached), result_schema_(result_schema) {
+      num_columns_ = cached_.size();
+      local_spill_dir_ = "sort_spill_" + GenerateUUID();
+    }
+
+    ~SpillableCacheStore() {}
+
+    arrow::Status DoSpill() {
+      if (is_spilled_) {
+        return arrow::Status::OK();
+      }
+      auto fs = std::make_shared<arrow::fs::LocalFileSystem>();
+      ARROW_ASSIGN_OR_RAISE(auto path_info, fs->GetFileInfo(local_spill_dir_));
+      if (path_info.type() == arrow::fs::FileType::NotFound) {
+        RETURN_NOT_OK(fs->CreateDir(local_spill_dir_, true));
+      }
+
+      int num_batches = cached_[0].size();
+      int64_t size = 0;
+      for (auto i = 0; i < num_batches; i++) {
+        ArrayList cols;
+        for (auto j = 0; j < cached_.size() - 1; j++) {
+          cols.push_back(cached_[j][i]);
+        }
+
+        RETURN_NOT_OK(SpillData(cols));
+      }
+      SetSpilled(true);
+      cached_.clear();
+
+      return arrow::Status::OK();
+    }
+
+    bool IsSpilled() { return is_spilled_; }
+
+    void SetSpilled(bool state) { is_spilled_ = state; }
+
+    std::string GenerateUUID() {
+      boost::uuids::random_generator generator;
+      return boost::uuids::to_string(generator());
+    }
+
+    std::string random_string(size_t length) {
+      auto randchar = []() -> char {
+        const char charset[] =
+            "0123456789"
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "abcdefghijklmnopqrstuvwxyz";
+        const size_t max_index = (sizeof(charset) - 1);
+        return charset[rand() % max_index];
+      };
+      std::string str(length, 0);
+      std::generate_n(str.begin(), length, randchar);
+      return str + ".arrow";
+    }
+
+    arrow::Status SpillData(ArrayList in) {
+      arrow::ipc::IpcPayload payload;
+      arrow::ipc::IpcWriteOptions options_;
+
+      auto batch = arrow::RecordBatch::Make(result_schema_, in[0]->length(), in);
+
+      arrow::ipc::DictionaryFieldMapper dict_file_mapper;  // unused
+      std::shared_ptr<arrow::io::FileOutputStream> spilled_file_os_;
+      std::string spilled_file_ =
+          local_spill_dir_ + "/" + random_string(128);  // TODO(): get tmp dir
+
+      ARROW_ASSIGN_OR_RAISE(spilled_file_os_,
+                            arrow::io::FileOutputStream::Open(spilled_file_, true));
+      int32_t metadata_length = -1;
+      auto schema_payload_ = std::make_shared<arrow::ipc::IpcPayload>();
+      RETURN_NOT_OK(arrow::ipc::GetSchemaPayload(
+          *result_schema_.get(), options_, dict_file_mapper, schema_payload_.get()));
+      ARROW_RETURN_NOT_OK(arrow::ipc::WriteIpcPayload(
+          *schema_payload_.get(), options_, spilled_file_os_.get(), &metadata_length));
+      arrow::ipc::GetRecordBatchPayload(*batch, options_, &payload);
+      ARROW_RETURN_NOT_OK(arrow::ipc::WriteIpcPayload(
+          payload, options_, spilled_file_os_.get(), &metadata_length));
+      spill_file_list.push_back(spilled_file_);
+
+      return arrow::Status::OK();
+    }
+
+    arrow::Result<std::shared_ptr<arrow::ipc::RecordBatchReader>>
+    GetRecordBatchStreamReader(const std::string& file_name) {
+      ARROW_ASSIGN_OR_RAISE(auto file_, arrow::io::ReadableFile::Open(file_name))
+      ARROW_ASSIGN_OR_RAISE(auto file_reader,
+                            arrow::ipc::RecordBatchStreamReader::Open(file_));
+      return file_reader;
+    }
+
+    arrow::Status Fetch() {
+      cached_.resize(num_columns_);
+      for (const auto& file_path : spill_file_list) {
+        ARROW_ASSIGN_OR_RAISE(auto file_reader, GetRecordBatchStreamReader(file_path));
+
+        std::vector<std::shared_ptr<arrow::RecordBatch>> batches;
+        RETURN_NOT_OK(file_reader->ReadAll(&batches));
+
+        auto batch = batches[0];
+
+        for (int i = 0; i < batch->num_columns(); i++) {
+          cached_[i].push_back(batch->column(i));
+        }
+        std::remove(file_path.c_str());
+      }
+      std::remove(local_spill_dir_.c_str());
+      is_spilled_ = false;
+      spill_file_list.clear();
+      return arrow::Status::OK();
+    }
+
+    std::vector<arrow::ArrayVector> GetCache() {
+      if (is_spilled_) {
+        Fetch();
+      }
+
+      return cached_;
+    }
+
+    std::string& GetSpillDir() { return local_spill_dir_; }
+
+   private:
+    std::vector<arrow::ArrayVector> cached_;
+    int num_columns_;
+    std::shared_ptr<arrow::Schema> result_schema_;
+    std::vector<std::string> spill_file_list;
+    bool is_spilled_ = false;
+    std::string local_spill_dir_;
+  };
 
   class TypedSorterCodeGenImpl {
    public:
@@ -315,7 +449,7 @@ class TypedSorterImpl : public CodeGenBase {
  public:
   TypedSorterImpl(arrow::compute::ExecContext* ctx) : ctx_(ctx) {}
 
-  arrow::Status Evaluate(const ArrayList& in) override {
+  arrow::Status Evaluate(ArrayList& in) override {
     num_batches_++;
     )" + cached_insert_str +
            R"(
@@ -663,12 +797,12 @@ extern "C" void MakeCodeGen(arrow::compute::ExecContext* ctx,
     SorterResultIterator(arrow::compute::ExecContext* ctx,
                          std::shared_ptr<arrow::Schema> schema,
                          std::shared_ptr<FixedSizeBinaryArray> indices_in,
-                         std::vector<arrow::ArrayVector>& cached)
+                         std::vector<arrow::ArrayVector> cached)
         : ctx_(ctx),
           schema_(schema),
           indices_in_cache_(indices_in),
           total_length_(indices_in->length()),
-          cached_in_(cached) {
+          cached_in_(std::move(cached)) {
       col_num_ = schema->num_fields();
       indices_begin_ = (ArrayItemIndexS*)indices_in->value_data();
       // appender_type won't be used
@@ -679,6 +813,48 @@ extern "C" void MakeCodeGen(arrow::compute::ExecContext* ctx,
         THROW_NOT_OK(MakeUnsafeAppender(ctx_, field->type(), appender_type, &appender));
         appender_list_.push_back(appender);
       }
+
+      for (int i = 0; i < col_num_; i++) {
+        int array_num = cached_in_[i].size();
+        for (int array_id = 0; array_id < array_num; array_id++) {
+          appender_list_[i]->AddArray(cached_in_[i][array_id]);
+        }
+      }
+      batch_size_ = GetBatchSize();
+    }
+
+    ~SorterResultIterator() {}
+
+    std::string ToString() override { return "SortArraysToIndicesResultIterator"; }
+
+    arrow::Status SortResultSpill() {
+      // TODO(): write to local disk
+
+      if (!spillablecachestore_) {
+        spillablecachestore_ = std::make_shared<SpillableCacheStore>(cached_in_, schema_);
+      }
+      std::cout << "call on: " << spillablecachestore_->GetSpillDir() << "|"
+                << is_spilled_ << "\n";
+      if (is_spilled_) {
+        return arrow::Status::OK();
+      }
+
+      spillablecachestore_->DoSpill();
+
+      // clean up references on cached array
+      for (auto appender : appender_list_) {
+        appender->ClearArrays();
+      }
+      cached_in_.clear();
+      is_spilled_ = true;
+      return arrow::Status::OK();
+    }
+
+    arrow::Status LoadCache() {
+      // TODO(): more checks on the availbity/CRC?
+      spillablecachestore_->Fetch();
+      cached_in_ = spillablecachestore_->GetCache();
+
       for (int i = 0; i < col_num_; i++) {
         arrow::ArrayVector array_vector = cached_in_[i];
         int array_num = array_vector.size();
@@ -687,11 +863,8 @@ extern "C" void MakeCodeGen(arrow::compute::ExecContext* ctx,
           appender_list_[i]->AddArray(arr);
         }
       }
-      batch_size_ = GetBatchSize();
+      return arrow::Status::OK();
     }
-    ~SorterResultIterator() {}
-
-    std::string ToString() override { return "SortArraysToIndicesResultIterator"; }
 
     bool HasNext() override {
       if (offset_ >= total_length_) {
@@ -701,6 +874,10 @@ extern "C" void MakeCodeGen(arrow::compute::ExecContext* ctx,
     }
 
     arrow::Status Next(std::shared_ptr<arrow::RecordBatch>* out) {
+      if (is_spilled_) {
+        LoadCache();
+        is_spilled_ = false;
+      }
       auto length = (total_length_ - offset_) > batch_size_ ? batch_size_
                                                             : (total_length_ - offset_);
       uint64_t count = 0;
@@ -736,9 +913,32 @@ extern "C" void MakeCodeGen(arrow::compute::ExecContext* ctx,
     std::vector<arrow::ArrayVector> cached_in_;
     std::vector<std::shared_ptr<arrow::DataType>> type_list_;
     std::vector<std::shared_ptr<AppenderBase>> appender_list_;
-    std::vector<std::shared_ptr<arrow::Array>> array_list_;
     std::shared_ptr<FixedSizeBinaryArray> indices_in_cache_;
+    bool is_spilled_ = false;
+    std::shared_ptr<SpillableCacheStore> spillablecachestore_;
   };
+
+ protected:
+  std::shared_ptr<CodeGenBase> sorter_;
+  std::vector<arrow::ArrayVector> cached_;
+  arrow::compute::ExecContext* ctx_;
+  std::string signature_;
+  std::vector<int> key_index_list_;
+  std::shared_ptr<arrow::Schema> result_schema_;
+  std::shared_ptr<gandiva::Projector> key_projector_;
+  std::vector<std::shared_ptr<arrow::DataType>> projected_types_;
+  std::vector<std::shared_ptr<arrow::Field>> projected_field_list_;
+  std::vector<std::shared_ptr<arrow::Field>> key_field_list_;
+  std::vector<int64_t> length_list_;
+  uint64_t num_batches_ = 0;
+  uint64_t items_total_ = 0;
+  // true for asc, false for desc
+  std::vector<bool> sort_directions_;
+  // true for nulls_first, false for nulls_last
+  std::vector<bool> nulls_order_;
+  bool NaN_check_;
+  int col_num_ = 0;
+  std::shared_ptr<SorterResultIterator> local_result_iter_;
 };
 
 ///////////////  SortArraysInPlace  ////////////////
@@ -757,7 +957,7 @@ class SortInplaceKernel : public SortArraysToIndicesKernel::Impl {
         key_projector_(key_projector),
         NaN_check_(NaN_check) {}
 
-  arrow::Status Evaluate(const ArrayList& in) override {
+  arrow::Status Evaluate(ArrayList& in) override {
     num_batches_++;
     // do projection here
     arrow::ArrayVector outputs;
@@ -1221,7 +1421,7 @@ class SortOnekeyKernel : public SortArraysToIndicesKernel::Impl {
   }
   ~SortOnekeyKernel() {}
 
-  arrow::Status Evaluate(const ArrayList& in) override {
+  arrow::Status Evaluate(ArrayList& in) override {
     num_batches_++;
     // do projection here
     arrow::ArrayVector outputs;
@@ -1232,8 +1432,8 @@ class SortOnekeyKernel : public SortArraysToIndicesKernel::Impl {
       cached_key_.push_back(std::make_shared<ArrayType_key>(outputs[0]));
       nulls_total_ += outputs[0]->null_count();
     } else {
-      cached_key_.push_back(std::make_shared<ArrayType_key>(in[key_id_]));
       nulls_total_ += in[key_id_]->null_count();
+      cached_key_.push_back(std::make_shared<ArrayType_key>(in[key_id_]));
     }
 
     items_total_ += in[key_id_]->length();
@@ -1241,9 +1441,19 @@ class SortOnekeyKernel : public SortArraysToIndicesKernel::Impl {
     if (cached_.size() <= col_num_) {
       cached_.resize(col_num_ + 1);
     }
+
     for (int i = 0; i < col_num_; i++) {
-      cached_[i].push_back(in[i]);
+      cached_[i].push_back(std::move(in[i]));
     }
+
+    return arrow::Status::OK();
+  }
+
+  arrow::Status Spill(int64_t* spilled_size) {
+    // do spill
+
+    local_result_iter_->SortResultSpill();
+
     return arrow::Status::OK();
   }
 
@@ -1497,6 +1707,8 @@ class SortOnekeyKernel : public SortArraysToIndicesKernel::Impl {
     RETURN_NOT_OK(
         MakeFixedSizeBinaryType(sizeof(ArrayItemIndexS) / sizeof(int32_t), &out_type));
     RETURN_NOT_OK(MakeFixedSizeBinaryArray(out_type, items_total_, indices_buf, out));
+    cached_key_.clear();
+
     return arrow::Status::OK();
   }
 
@@ -1505,7 +1717,10 @@ class SortOnekeyKernel : public SortArraysToIndicesKernel::Impl {
       std::shared_ptr<ResultIterator<arrow::RecordBatch>>* out) override {
     std::shared_ptr<FixedSizeBinaryArray> indices_out;
     RETURN_NOT_OK(FinishInternal(&indices_out));
-    *out = std::make_shared<SorterResultIterator>(ctx_, schema, indices_out, cached_);
+
+    local_result_iter_ = std::make_shared<SorterResultIterator>(ctx_, schema, indices_out,
+                                                                std::move(cached_));
+    *out = local_result_iter_;
     return arrow::Status::OK();
   }
 
@@ -1525,6 +1740,7 @@ class SortOnekeyKernel : public SortArraysToIndicesKernel::Impl {
   uint64_t nulls_total_ = 0;
   int col_num_;
   int key_id_;
+  std::shared_ptr<SorterResultIterator> local_result_iter_;
 };
 
 ///////////////  SortArraysMultipleKeys  ////////////////
@@ -1567,7 +1783,7 @@ class SortMultiplekeyKernel : public SortArraysToIndicesKernel::Impl {
   }
   ~SortMultiplekeyKernel() {}
 
-  arrow::Status Evaluate(const ArrayList& in) override {
+  arrow::Status Evaluate(ArrayList& in) override {
     num_batches_++;
     if (cached_.size() <= col_num_) {
       cached_.resize(col_num_ + 1);
@@ -1675,7 +1891,8 @@ class SortMultiplekeyKernel : public SortArraysToIndicesKernel::Impl {
       std::shared_ptr<ResultIterator<arrow::RecordBatch>>* out) override {
     std::shared_ptr<FixedSizeBinaryArray> indices_out;
     RETURN_NOT_OK(FinishInternal(&indices_out));
-    *out = std::make_shared<SorterResultIterator>(ctx_, schema, indices_out, cached_);
+    *out = std::make_shared<SorterResultIterator>(ctx_, schema, indices_out,
+                                                  std::move(cached_));
     return arrow::Status::OK();
   }
 
@@ -1863,8 +2080,12 @@ SortArraysToIndicesKernel::SortArraysToIndicesKernel(
 }
 #undef PROCESS_SUPPORTED_TYPES
 
-arrow::Status SortArraysToIndicesKernel::Evaluate(const ArrayList& in) {
+arrow::Status SortArraysToIndicesKernel::Evaluate(ArrayList& in) {
   return impl_->Evaluate(in);
+}
+
+arrow::Status SortArraysToIndicesKernel::Spill(int64_t* spilled_size) {
+  return impl_->Spill(spilled_size);
 }
 
 arrow::Status SortArraysToIndicesKernel::MakeResultIterator(

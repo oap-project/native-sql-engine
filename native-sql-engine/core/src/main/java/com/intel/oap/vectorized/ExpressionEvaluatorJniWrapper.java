@@ -145,6 +145,8 @@ public class ExpressionEvaluatorJniWrapper {
         native ArrowRecordBatchBuilder[] nativeEvaluate(long nativeHandler, int numRows, long[] bufAddrs,
                         long[] bufSizes) throws RuntimeException;
 
+       native ArrowRecordBatchBuilder[] nativeEvaluate2(long nativeHandler, byte[] bytes) throws RuntimeException;
+
         /**
          * Get native kernel signature by the nativeHandler.
          *

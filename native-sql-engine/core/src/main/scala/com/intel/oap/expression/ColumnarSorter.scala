@@ -92,8 +92,8 @@ class ColumnarSorter(
     elapse.set(NANOSECONDS.toMillis(total_elapse))
     sortTime.set(NANOSECONDS.toMillis(sort_elapse))
     shuffleTime.set(NANOSECONDS.toMillis(shuffle_elapse))
-    inputBatchHolder.foreach(cb => cb.close())
-    inputBatchHolder.clear
+    //inputBatchHolder.foreach(cb => cb.close())
+    //inputBatchHolder.clear
     if (sorter != null) {
       sorter.close()
     }
@@ -110,7 +110,7 @@ class ColumnarSorter(
     (0 until input.numCols).toList.foreach(i =>
       input.column(i).asInstanceOf[ArrowWritableColumnVector].retain())
     val beforeSort = System.nanoTime()
-    sorter.evaluate(input_batch)
+    sorter.evaluate2(input_batch)
     sort_elapse += System.nanoTime() - beforeSort
     total_elapse += System.nanoTime() - beforeSort
     ConverterUtils.releaseArrowRecordBatch(input_batch)
@@ -160,8 +160,8 @@ class ColumnarSorter(
           return true
         } else {
           has_next = false
-          inputBatchHolder.foreach(cb => cb.close())
-          inputBatchHolder.clear
+          //inputBatchHolder.foreach(cb => cb.close())
+          //inputBatchHolder.clear
           return false
         }
       }
@@ -373,7 +373,7 @@ object ColumnarSorter extends Logging {
     val (sort_expr, arrowSchema) = init(sortOrder, outputAttributes, sparkConf)
     val sorter = new ExpressionEvaluator()
     val signature = sorter
-      .build(arrowSchema, Lists.newArrayList(sort_expr), arrowSchema, true /*return at finish*/ )
+      .build(arrowSchema, Lists.newArrayList(sort_expr), arrowSchema, true /*return at finish*/)
     sorter.close
     signature
   }
@@ -391,7 +391,7 @@ object ColumnarSorter extends Logging {
     val (sort_expr, arrowSchema) = init(sortOrder, outputAttributes, sparkConf)
     val sorter = new ExpressionEvaluator(listJars.toList.asJava)
     sorter
-      .build(arrowSchema, Lists.newArrayList(sort_expr), arrowSchema, true /*return at finish*/ )
+      .build(arrowSchema, Lists.newArrayList(sort_expr), arrowSchema, true /*return at finish*/, true/*enable spill*/)
     new ColumnarSorter(
       sorter,
       outputAttributes,

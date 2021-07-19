@@ -42,7 +42,7 @@ class GandivaCodeGenerator : public CodeGenerator {
   arrow::Status SetMember(const std::shared_ptr<arrow::RecordBatch>& in) {
     return arrow::Status::OK();
   }
-  arrow::Status evaluate(const std::shared_ptr<arrow::RecordBatch>& in,
+  arrow::Status evaluate(std::shared_ptr<arrow::RecordBatch>& in,
                          std::vector<std::shared_ptr<arrow::RecordBatch>>* out) {
     return arrow::Status::OK();
   }

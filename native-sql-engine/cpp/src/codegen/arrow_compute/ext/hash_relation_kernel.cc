@@ -154,7 +154,7 @@ class HashRelationKernel::Impl {
 
   ~Impl() {}
 
-  arrow::Status Evaluate(const ArrayList& in) {
+  arrow::Status Evaluate(ArrayList& in) {
     if (in.size() > 0) num_total_cached_ += in[0]->length();
     for (int i = 0; i < in.size(); i++) {
       RETURN_NOT_OK(hash_relation_->AppendPayloadColumn(i, in[i]));
@@ -346,9 +346,7 @@ HashRelationKernel::HashRelationKernel(
   kernel_name_ = "HashRelationKernel";
 }
 
-arrow::Status HashRelationKernel::Evaluate(const ArrayList& in) {
-  return impl_->Evaluate(in);
-}
+arrow::Status HashRelationKernel::Evaluate(ArrayList& in) { return impl_->Evaluate(in); }
 
 arrow::Status HashRelationKernel::MakeResultIterator(
     std::shared_ptr<arrow::Schema> schema,

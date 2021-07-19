@@ -47,6 +47,10 @@ class AppenderBase {
     return arrow::Status::NotImplemented("AppenderBase PopArray is abstract.");
   }
 
+  virtual arrow::Status ClearArrays() {
+    return arrow::Status::NotImplemented("AppenderBase ClearArrays is abstract.");
+  }
+
   virtual arrow::Status Append(const uint16_t& array_id, const uint16_t& item_id) {
     return arrow::Status::NotImplemented("AppenderBase Append is abstract.");
   }
@@ -108,13 +112,19 @@ class ArrayAppender<DataType, enable_if_timestamp<DataType>> : public AppenderBa
   AppenderType GetType() override { return type_; }
   arrow::Status AddArray(const std::shared_ptr<arrow::Array>& arr) override {
     auto typed_arr_ = std::dynamic_pointer_cast<ArrayType_>(arr);
-    cached_arr_.emplace_back(typed_arr_);
+    cached_arr_.push_back(typed_arr_);
     if (typed_arr_->null_count() > 0) has_null_ = true;
     return arrow::Status::OK();
   }
 
   arrow::Status PopArray() override {
     cached_arr_.pop_back();
+    has_null_ = false;
+    return arrow::Status::OK();
+  }
+
+  arrow::Status ClearArrays() override {
+    cached_arr_.clear();
     has_null_ = false;
     return arrow::Status::OK();
   }
@@ -198,7 +208,7 @@ class ArrayAppender<DataType, enable_if_number_or_date<DataType>> : public Appen
   AppenderType GetType() override { return type_; }
   arrow::Status AddArray(const std::shared_ptr<arrow::Array>& arr) override {
     auto typed_arr_ = std::dynamic_pointer_cast<ArrayType_>(arr);
-    cached_arr_.emplace_back(typed_arr_);
+    cached_arr_.push_back(typed_arr_);
     if (typed_arr_->null_count() > 0) has_null_ = true;
     return arrow::Status::OK();
   }
@@ -208,7 +218,11 @@ class ArrayAppender<DataType, enable_if_number_or_date<DataType>> : public Appen
     has_null_ = false;
     return arrow::Status::OK();
   }
-
+  arrow::Status ClearArrays() override {
+    cached_arr_.clear();
+    has_null_ = false;
+    return arrow::Status::OK();
+  }
   arrow::Status Append(const uint16_t& array_id, const uint16_t& item_id) override {
     if (has_null_ && cached_arr_[array_id]->null_count() > 0 &&
         cached_arr_[array_id]->IsNull(item_id)) {
@@ -285,7 +299,7 @@ class ArrayAppender<DataType, arrow::enable_if_string_like<DataType>>
   AppenderType GetType() override { return type_; }
   arrow::Status AddArray(const std::shared_ptr<arrow::Array>& arr) override {
     auto typed_arr_ = std::dynamic_pointer_cast<ArrayType_>(arr);
-    cached_arr_.emplace_back(typed_arr_);
+    cached_arr_.push_back(typed_arr_);
     if (typed_arr_->null_count() > 0) has_null_ = true;
     return arrow::Status::OK();
   }
@@ -295,7 +309,11 @@ class ArrayAppender<DataType, arrow::enable_if_string_like<DataType>>
     has_null_ = false;
     return arrow::Status::OK();
   }
-
+  arrow::Status ClearArrays() override {
+    cached_arr_.clear();
+    has_null_ = false;
+    return arrow::Status::OK();
+  }
   arrow::Status Append(const uint16_t& array_id, const uint16_t& item_id) override {
     if (has_null_ && cached_arr_[array_id]->null_count() > 0 &&
         cached_arr_[array_id]->IsNull(item_id)) {
@@ -370,7 +388,7 @@ class ArrayAppender<DataType, arrow::enable_if_boolean<DataType>> : public Appen
   AppenderType GetType() override { return type_; }
   arrow::Status AddArray(const std::shared_ptr<arrow::Array>& arr) override {
     auto typed_arr_ = std::dynamic_pointer_cast<ArrayType_>(arr);
-    cached_arr_.emplace_back(typed_arr_);
+    cached_arr_.push_back(typed_arr_);
     if (typed_arr_->null_count() > 0) has_null_ = true;
     return arrow::Status::OK();
   }
@@ -380,7 +398,11 @@ class ArrayAppender<DataType, arrow::enable_if_boolean<DataType>> : public Appen
     has_null_ = false;
     return arrow::Status::OK();
   }
-
+  arrow::Status ClearArrays() override {
+    cached_arr_.clear();
+    has_null_ = false;
+    return arrow::Status::OK();
+  }
   arrow::Status Append(const uint16_t& array_id, const uint16_t& item_id) override {
     if (has_null_ && cached_arr_[array_id]->null_count() > 0 &&
         cached_arr_[array_id]->IsNull(item_id)) {
@@ -457,7 +479,7 @@ class ArrayAppender<DataType, enable_if_decimal<DataType>> : public AppenderBase
   AppenderType GetType() override { return type_; }
   arrow::Status AddArray(const std::shared_ptr<arrow::Array>& arr) override {
     auto typed_arr_ = std::dynamic_pointer_cast<ArrayType_>(arr);
-    cached_arr_.emplace_back(typed_arr_);
+    cached_arr_.push_back(typed_arr_);
     if (typed_arr_->null_count() > 0) has_null_ = true;
     return arrow::Status::OK();
   }
@@ -467,7 +489,11 @@ class ArrayAppender<DataType, enable_if_decimal<DataType>> : public AppenderBase
     has_null_ = false;
     return arrow::Status::OK();
   }
-
+  arrow::Status ClearArrays() override {
+    cached_arr_.clear();
+    has_null_ = false;
+    return arrow::Status::OK();
+  }
   arrow::Status Append(const uint16_t& array_id, const uint16_t& item_id) override {
     if (has_null_ && cached_arr_[array_id]->IsNull(item_id)) {
       RETURN_NOT_OK(builder_->AppendNull());
@@ -590,7 +616,7 @@ class UnsafeArrayAppender<DataType, enable_if_timestamp<DataType>> : public Appe
   AppenderType GetType() override { return type_; }
   arrow::Status AddArray(const std::shared_ptr<arrow::Array>& arr) override {
     auto typed_arr_ = std::dynamic_pointer_cast<ArrayType_>(arr);
-    cached_arr_.emplace_back(typed_arr_);
+    cached_arr_.push_back(typed_arr_);
     if (typed_arr_->null_count() > 0) has_null_ = true;
     return arrow::Status::OK();
   }
@@ -600,7 +626,11 @@ class UnsafeArrayAppender<DataType, enable_if_timestamp<DataType>> : public Appe
     has_null_ = false;
     return arrow::Status::OK();
   }
-
+  arrow::Status ClearArrays() override {
+    cached_arr_.clear();
+    has_null_ = false;
+    return arrow::Status::OK();
+  }
   arrow::Status Append(const uint16_t& array_id, const uint16_t& item_id) override {
     if (has_null_ && cached_arr_[array_id]->null_count() > 0 &&
         cached_arr_[array_id]->IsNull(item_id)) {
@@ -686,10 +716,11 @@ class UnsafeArrayAppender<DataType, enable_if_number_or_date<DataType>>
   ~UnsafeArrayAppender() {}
 
   AppenderType GetType() override { return type_; }
+
   arrow::Status AddArray(const std::shared_ptr<arrow::Array>& arr) override {
     auto typed_arr_ = std::dynamic_pointer_cast<ArrayType_>(arr);
-    cached_arr_.emplace_back(typed_arr_);
     if (typed_arr_->null_count() > 0) has_null_ = true;
+    cached_arr_.push_back(typed_arr_);
     return arrow::Status::OK();
   }
 
@@ -698,7 +729,11 @@ class UnsafeArrayAppender<DataType, enable_if_number_or_date<DataType>>
     has_null_ = false;
     return arrow::Status::OK();
   }
-
+  arrow::Status ClearArrays() override {
+    cached_arr_.clear();
+    has_null_ = false;
+    return arrow::Status::OK();
+  }
   arrow::Status Append(const uint16_t& array_id, const uint16_t& item_id) override {
     if (has_null_ && cached_arr_[array_id]->null_count() > 0 &&
         cached_arr_[array_id]->IsNull(item_id)) {
@@ -786,7 +821,7 @@ class UnsafeArrayAppender<DataType, arrow::enable_if_string_like<DataType>>
   AppenderType GetType() override { return type_; }
   arrow::Status AddArray(const std::shared_ptr<arrow::Array>& arr) override {
     auto typed_arr_ = std::dynamic_pointer_cast<ArrayType_>(arr);
-    cached_arr_.emplace_back(typed_arr_);
+    cached_arr_.push_back(typed_arr_);
     if (typed_arr_->null_count() > 0) has_null_ = true;
     return arrow::Status::OK();
   }
@@ -796,7 +831,11 @@ class UnsafeArrayAppender<DataType, arrow::enable_if_string_like<DataType>>
     has_null_ = false;
     return arrow::Status::OK();
   }
-
+  arrow::Status ClearArrays() override {
+    cached_arr_.clear();
+    has_null_ = false;
+    return arrow::Status::OK();
+  }
   arrow::Status Append(const uint16_t& array_id, const uint16_t& item_id) override {
     if (has_null_ && cached_arr_[array_id]->null_count() > 0 &&
         cached_arr_[array_id]->IsNull(item_id)) {
@@ -878,7 +917,7 @@ class UnsafeArrayAppender<DataType, arrow::enable_if_boolean<DataType>>
   AppenderType GetType() override { return type_; }
   arrow::Status AddArray(const std::shared_ptr<arrow::Array>& arr) override {
     auto typed_arr_ = std::dynamic_pointer_cast<ArrayType_>(arr);
-    cached_arr_.emplace_back(typed_arr_);
+    cached_arr_.push_back(typed_arr_);
     if (typed_arr_->null_count() > 0) has_null_ = true;
     return arrow::Status::OK();
   }
@@ -888,7 +927,11 @@ class UnsafeArrayAppender<DataType, arrow::enable_if_boolean<DataType>>
     has_null_ = false;
     return arrow::Status::OK();
   }
-
+  arrow::Status ClearArrays() override {
+    cached_arr_.clear();
+    has_null_ = false;
+    return arrow::Status::OK();
+  }
   arrow::Status Append(const uint16_t& array_id, const uint16_t& item_id) override {
     if (has_null_ && cached_arr_[array_id]->null_count() > 0 &&
         cached_arr_[array_id]->IsNull(item_id)) {
@@ -971,7 +1014,7 @@ class UnsafeArrayAppender<DataType, enable_if_decimal<DataType>> : public Append
   AppenderType GetType() override { return type_; }
   arrow::Status AddArray(const std::shared_ptr<arrow::Array>& arr) override {
     auto typed_arr_ = std::dynamic_pointer_cast<ArrayType_>(arr);
-    cached_arr_.emplace_back(typed_arr_);
+    cached_arr_.push_back(typed_arr_);
     if (typed_arr_->null_count() > 0) has_null_ = true;
     return arrow::Status::OK();
   }
@@ -981,7 +1024,11 @@ class UnsafeArrayAppender<DataType, enable_if_decimal<DataType>> : public Append
     has_null_ = false;
     return arrow::Status::OK();
   }
-
+  arrow::Status ClearArrays() override {
+    cached_arr_.clear();
+    has_null_ = false;
+    return arrow::Status::OK();
+  }
   arrow::Status Append(const uint16_t& array_id, const uint16_t& item_id) override {
     if (has_null_ && cached_arr_[array_id]->IsNull(item_id)) {
       builder_->UnsafeAppendNull();

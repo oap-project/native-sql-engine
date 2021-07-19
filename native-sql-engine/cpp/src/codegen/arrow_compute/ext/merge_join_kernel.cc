@@ -1511,7 +1511,7 @@ ConditionedJoinArraysKernel::ConditionedJoinArraysKernel(
   kernel_name_ = "ConditionedJoinArraysKernel";
 }
 
-arrow::Status ConditionedJoinArraysKernel::Evaluate(const ArrayList& in) {
+arrow::Status ConditionedJoinArraysKernel::Evaluate(ArrayList& in) {
   return impl_->Evaluate(in);
 }
 
