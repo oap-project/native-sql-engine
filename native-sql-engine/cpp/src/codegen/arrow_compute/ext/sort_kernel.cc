@@ -1761,8 +1761,7 @@ SortArraysToIndicesKernel::SortArraysToIndicesKernel(
 
   if (key_field_list.size() == 1 && result_schema->num_fields() == 1 &&
       key_field_list[0]->type()->id() != arrow::Type::STRING &&
-      key_field_list[0]->type()->id() != arrow::Type::BOOL &&
-      !pre_processed_key_) {
+      key_field_list[0]->type()->id() != arrow::Type::BOOL && !pre_processed_key_) {
     // Will use SortInplace when sorting for one non-string and non-boolean col
 #ifdef DEBUG
     std::cout << "UseSortInplace" << std::endl;
