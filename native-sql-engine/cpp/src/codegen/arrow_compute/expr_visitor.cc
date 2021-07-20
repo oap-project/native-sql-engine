@@ -523,6 +523,12 @@ arrow::Status ExprVisitor::Eval(const std::shared_ptr<arrow::RecordBatch>& in) {
   return arrow::Status::OK();
 }
 
+arrow::Status ExprVisitor::Eval(arrow::RecordBatchIterator in) {
+  in_iterator_ = std::move(in);
+  RETURN_NOT_OK(Eval());
+  return arrow::Status::OK();
+}
+
 arrow::Status ExprVisitor::Eval() {
   if (return_type_ != ArrowComputeResultType::None) {
 #ifdef DEBUG_LEVEL_2

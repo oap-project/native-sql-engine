@@ -46,6 +46,9 @@ class GandivaCodeGenerator : public CodeGenerator {
                          std::vector<std::shared_ptr<arrow::RecordBatch>>* out) {
     return arrow::Status::OK();
   }
+  arrow::Status evaluate(arrow::RecordBatchIterator in) {
+    return arrow::Status::OK();
+  }
   arrow::Status finish(std::vector<std::shared_ptr<arrow::RecordBatch>>* out) {
     return arrow::Status::OK();
   }

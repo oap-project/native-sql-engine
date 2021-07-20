@@ -35,6 +35,7 @@ class CodeGenerator {
   virtual arrow::Status evaluate(
       const std::shared_ptr<arrow::RecordBatch>& in,
       std::vector<std::shared_ptr<arrow::RecordBatch>>* out) = 0;
+  virtual arrow::Status evaluate(arrow::RecordBatchIterator in) = 0;
   virtual arrow::Status finish(std::vector<std::shared_ptr<arrow::RecordBatch>>* out) = 0;
   virtual std::string GetSignature() { return ""; };
   virtual arrow::Status finish(std::shared_ptr<ResultIteratorBase>* out) {

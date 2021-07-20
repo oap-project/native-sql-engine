@@ -19,6 +19,7 @@
 
 #include <arrow/compute/api.h>
 #include <arrow/status.h>
+#include <arrow/util/iterator.h>
 #include <gandiva/node.h>
 #include <gandiva/node_visitor.h>
 
@@ -153,6 +154,7 @@ class ExprVisitor : public std::enable_shared_from_this<ExprVisitor> {
   arrow::Status Eval(const std::shared_ptr<arrow::Array>& selection_in,
                      const std::shared_ptr<arrow::RecordBatch>& in);
   arrow::Status Eval(const std::shared_ptr<arrow::RecordBatch>& in);
+  arrow::Status Eval(arrow::RecordBatchIterator in);
   arrow::Status Eval();
   std::string GetSignature() { return signature_; }
   arrow::Status SetMember(const std::shared_ptr<arrow::RecordBatch>& ms);
@@ -190,6 +192,7 @@ class ExprVisitor : public std::enable_shared_from_this<ExprVisitor> {
   std::shared_ptr<ExprVisitor> dependency_;
   std::shared_ptr<arrow::Array> in_selection_array_;
   std::shared_ptr<arrow::RecordBatch> in_record_batch_;
+  arrow::RecordBatchIterator in_iterator_;
   std::vector<std::shared_ptr<arrow::Field>> ret_fields_;
 
   // For dual input kernels like probe
