@@ -140,7 +140,9 @@ class TypedJoinKernel : public ConditionedJoinKernel::Impl {
     }
     result_schema = std::make_shared<arrow::Schema>(result_schema_);
     //TODO(): fix with multiple keys
-    exist_index_ = 1;
+    if (join_type == 4) {
+      exist_index_ = 1;
+    }
   }
 
   arrow::Status Evaluate(const ArrayList& in) override {
@@ -268,6 +270,7 @@ class TypedJoinKernel : public ConditionedJoinKernel::Impl {
           last_pos(0),
           idx_to_arrarid_(idx_to_arrarid),
           cached_in_(cached_in), exist_index_(exist_index) {
+            std::cout << "schema: " << schema->ToString() << std::endl;
 
       int result_col_num = schema->num_fields();
 
@@ -2208,6 +2211,9 @@ class OperatorConditionedJoinArraysKernel : public ConditionedJoinArraysKernel::
       : ctx_(ctx), result_schema(result_schema) {}
   arrow::Status Evaluate(const ArrayList& in) override {
     col_num_ = result_schema->num_fields();
+    if (cached_.size() <= col_num_) {
+      cached_.resize(col_num_);
+    }
     for (int i = 0; i < col_num_; i++) {
       cached_[i].push_back(in[i]);
     }
