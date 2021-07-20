@@ -44,16 +44,26 @@ class SortRelation {
     lazy_in_ = lazy_in;
     sort_relation_key_list_ = sort_relation_key_list;
     sort_relation_payload_list_ = sort_relation_payload_list;
+    ArrayAdvance(0);
   }
 
   ~SortRelation() = default;
 
-  void ReleaseArray(int array_id) {
+  void ArrayRelease(int array_id) {
     for (auto col : sort_relation_key_list_) {
       col->ReleaseArray(array_id);
     }
     for (auto col : sort_relation_payload_list_) {
       col->ReleaseArray(array_id);
+    }
+  }
+
+  void ArrayAdvance(int array_id) {
+    for (auto col : sort_relation_key_list_) {
+      col->Advance(array_id);
+    }
+    for (auto col : sort_relation_payload_list_) {
+      col->Advance(array_id);
     }
   }
 
@@ -69,10 +79,12 @@ class SortRelation {
     while (true) {
       int64_t current_batch_length = lazy_in_->GetNumRowsOfBatch(batch_i);
       if (remaining <= current_batch_length) {
-        for (int64_t i = requested_batches; i < batch_i; i++) {
-          ReleaseArray(i);
-        }
+        int32_t previous_requested_batches = requested_batches;
         requested_batches = batch_i;
+        ArrayAdvance(requested_batches);
+        for (int32_t i = 0; i <= previous_requested_batches; i++) {
+          ArrayRelease(i);
+        }
         offset_in_current_batch_ = remaining - 1;
         return;
       }
@@ -123,6 +135,7 @@ class SortRelation {
     return true;
   }
 
+  // IS THIS POSSIBLY BUGGY AS THE FIRST ELEMENT DID NOT GET CHECKED?
   bool Next() {
     if (!CheckRangeBound(1)) return false;
     Advance(1);

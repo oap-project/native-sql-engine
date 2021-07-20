@@ -37,6 +37,16 @@ class LazyBatchIterator {
     this->in_ = std::move(in);
   }
 
+  bool IsBatchReleased(int32_t batch_id) {
+    if (batch_id >= ref_cnts_.size()) {
+      return false;
+    }
+    if (ref_cnts_[batch_id] == 0) {
+      return true;
+    }
+    return false;
+  }
+
   std::shared_ptr<arrow::RecordBatch> GetBatch(int32_t batch_id) {
     if (!Advance(batch_id)) {
       return nullptr;
