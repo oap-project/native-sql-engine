@@ -44,7 +44,6 @@ class SortRelation {
     lazy_in_ = lazy_in;
     sort_relation_key_list_ = sort_relation_key_list;
     sort_relation_payload_list_ = sort_relation_payload_list;
-    ArrayAdvance(0);
   }
 
   ~SortRelation() = default;
