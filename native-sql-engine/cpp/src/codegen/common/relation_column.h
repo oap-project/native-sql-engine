@@ -236,6 +236,9 @@ class TypedLazyLoadRelationColumn<DataType, enable_if_number_or_decimal<DataType
   }
 
   arrow::Status ReleaseArray(int array_id) override {
+    if (array_id >= array_released.size()) {
+      return arrow::Status::OK();
+    }
     if (array_released[array_id]) {
       return arrow::Status::OK();
     }
@@ -251,9 +254,6 @@ class TypedLazyLoadRelationColumn<DataType, enable_if_number_or_decimal<DataType
   
   T GetValue(int array_id, int id) {
     Advance(array_id);
-    if (array_id >= 1) {
-      ReleaseArray(array_id - 1);
-    }
     return delegated.GetValue(array_id, id);
   }
   bool HasNull() override { return has_null_; }
@@ -304,6 +304,9 @@ class TypedLazyLoadRelationColumn<DataType, enable_if_string_like<DataType>>
   }
 
   arrow::Status ReleaseArray(int array_id) override {
+    if (array_id >= array_released.size()) {
+      return arrow::Status::OK();
+    }
     if (array_released[array_id]) {
       return arrow::Status::OK();
     }
@@ -319,9 +322,6 @@ class TypedLazyLoadRelationColumn<DataType, enable_if_string_like<DataType>>
   
   std::string GetValue(int array_id, int id) {
     Advance(array_id);
-    if (array_id >= 1) {
-      ReleaseArray(array_id - 1);
-    }
     return delegated.GetValue(array_id, id);
   }
   

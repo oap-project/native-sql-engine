@@ -48,6 +48,15 @@ class SortRelation {
 
   ~SortRelation() = default;
 
+  void ReleaseArray(int array_id) {
+    for (auto col : sort_relation_key_list_) {
+      col->ReleaseArray(array_id);
+    }
+    for (auto col : sort_relation_payload_list_) {
+      col->ReleaseArray(array_id);
+    }
+  }
+
   void Advance(int shift) {
     int64_t batch_length = lazy_in_->GetNumRowsOfBatch(requested_batches);
     int64_t batch_remaining = (batch_length - 1) - offset_in_current_batch_;
@@ -60,6 +69,9 @@ class SortRelation {
     while (true) {
       int64_t current_batch_length = lazy_in_->GetNumRowsOfBatch(batch_i);
       if (remaining <= current_batch_length) {
+        for (int64_t i = requested_batches; i < batch_i; i++) {
+          ReleaseArray(i);
+        }
         requested_batches = batch_i;
         offset_in_current_batch_ = remaining - 1;
         return;
