@@ -157,7 +157,7 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession with SQLHelper
   /** For Debug Use only
    * List of test cases to test, in lower cases. */
   protected def testList: Set[String] = Set(
-
+    "udf/postgreSQL/udf-aggregates_part1.sql"
   )
 
   /** List of test cases to ignore, in lower cases. */
@@ -167,7 +167,7 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession with SQLHelper
     /** segfault, compilation error and exception */
 
     "postgreSQL/window_part3.sql", // WindowSortKernel::Impl::GetCompFunction_
-    "subquery/in-subquery/in-joins.sql", // NullPointerException
+    "subquery/in-subquery/in-joins.sql", // NullPointerException: LocalTableScanExec.stringArgs
     "udf/postgreSQL/udf-aggregates_part1.sql", // IllegalStateException: Value at index is null
 
     /** Cannot reproduce */
@@ -192,7 +192,6 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession with SQLHelper
 //    "explain-aqe.sql", // plan check
 //    "explain.sql", // plan check
 //    "describe.sql", // AnalysisException
-//    "subquery/scalar-subquery/scalar-subquery-select.sql", // SMJ LeftAnti
 //    "ansi/decimalArithmeticOperations.sql",
 //    "postgreSQL/union.sql",  // aggregate-groupby
 //    "postgreSQL/int4.sql", // exception expected

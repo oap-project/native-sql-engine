@@ -13,7 +13,9 @@ then
 else
   echo "SPARK_HOME is $spark_home"
 fi
-mvn clean test -P full-scala-compiler -am -pl native-sql-engine/core -Dbuild_arrow=OFF -Dbuild_protobuf=OFF -DfailIfNoTests=false -DargLine="-Dspark.test.home=$spark_home" -Dexec.skip=true -Dmaven.test.failure.ignore=true &>  native-sql-engine/tools/log-file.log
+count=0; while [ $count -le 40 ]; do echo "Elapsed 3 minutes"; sleep 180; let count++; done & # print log
+mvn clean test -P full-scala-compiler -am -pl native-sql-engine/core -Dbuild_arrow=OFF -Dbuild_protobuf=OFF -DfailIfNoTests=false -DargLine="-Dspark.test.home=$spark_home" -Dexec.skip=true -Dmaven.test.failure.ignore=true
+# &>  native-sql-engine/tools/log-file.log
 cd native-sql-engine/tools/
 tests_total=0
 module_tested=0

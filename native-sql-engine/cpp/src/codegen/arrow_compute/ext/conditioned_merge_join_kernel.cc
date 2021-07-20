@@ -408,6 +408,7 @@ class ConditionedMergeJoinKernel::Impl {
     auto streamed_relation = "sort_relation_" + std::to_string(relation_id_[1]) + "_";
     auto left_index_name = "left_index_" + relation_id;
     auto right_index_name = "right_index_" + relation_id;
+    auto outer_join_num_matches_name = "outer_join_num_matches_" + relation_id;
 
     ///// Get Matched row /////
     codes_ss << "int " << range_name << " = 0;" << std::endl;
@@ -449,16 +450,14 @@ class ConditionedMergeJoinKernel::Impl {
       codes_ss << right_for_loop_codes.str();
       codes_ss << "auto is_smj_" << relation_id << " = false;" << std::endl;
     }
+    codes_ss << "int " << outer_join_num_matches_name << " = 0;" << std::endl;
     codes_ss << "for (int " << range_id << " = 0; " << range_id << " < " << range_name
              << "; " << range_id << "++) {" << std::endl;
-    codes_ss << "if(!" << fill_null_name << "){" << std::endl;
+    codes_ss << "if(" << function_name << "_res == 0"
+             << ") {" << std::endl;
     codes_ss << left_index_name << " = " << build_relation << "->GetItemIndexWithShift("
              << range_id << ");" << std::endl;
-    codes_ss << "}" << std::endl;
-    if (!cache_right) {
-      codes_ss << "auto is_smj_" << relation_id << " = false;" << std::endl;
-      codes_ss << right_for_loop_codes.str();
-    }
+    codes_ss << fill_null_name << " = false;" << std::endl;
     if (cond_check) {
       auto condition_name = "ConditionCheck_" + std::to_string(relation_id_[0]);
       if (use_relation_for_stream) {
@@ -468,8 +467,18 @@ class ConditionedMergeJoinKernel::Impl {
         codes_ss << "if (!" << condition_name << "(" << left_index_name << ")) {"
                  << std::endl;
       }
-      codes_ss << fill_null_name << " = true;" << std::endl;
-      codes_ss << "}" << std::endl;
+      codes_ss << "if ((" << range_id << " + 1) == " << range_name << " && "
+               << outer_join_num_matches_name << " == 0) {" << std::endl;
+      codes_ss << fill_null_name << " = true; } else {" << std::endl;
+      codes_ss << "continue;" << std::endl;
+      codes_ss << "}}" << std::endl;
+    }
+    codes_ss << "} else {" << std::endl;
+    codes_ss << fill_null_name << " =  true;}" << std::endl;
+    codes_ss << outer_join_num_matches_name << " += 1;" << std::endl;
+    if (!cache_right) {
+      codes_ss << "auto is_smj_" << relation_id << " = false;" << std::endl;
+      codes_ss << right_for_loop_codes.str();
     }
     finish_codes_ss << "} // end of Outer Join" << std::endl;
     if (use_relation_for_stream) {

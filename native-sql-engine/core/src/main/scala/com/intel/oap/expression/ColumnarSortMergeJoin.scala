@@ -21,7 +21,6 @@ import java.util.concurrent.TimeUnit._
 
 import com.intel.oap.ColumnarPluginConfig
 import com.intel.oap.vectorized.ArrowWritableColumnVector
-
 import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.expressions._
@@ -37,7 +36,8 @@ import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide
 import scala.collection.JavaConverters._
 import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector}
+import org.apache.spark.sql.vectorized.{ColumnVector, ColumnarBatch}
+
 import scala.collection.mutable.ListBuffer
 import org.apache.arrow.vector.ipc.message.ArrowFieldNode
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch
@@ -46,20 +46,19 @@ import org.apache.arrow.vector.types.pojo.Field
 import org.apache.arrow.vector.types.pojo.Schema
 import org.apache.arrow.gandiva.expression._
 import org.apache.arrow.gandiva.evaluator._
-
 import org.apache.arrow.memory.ArrowBuf
-
-import com.google.common.collect.Lists;
-
+import com.google.common.collect.Lists
 import org.apache.spark.sql.types.{DataType, DecimalType, StructType}
 import com.intel.oap.vectorized.ExpressionEvaluator
 import com.intel.oap.vectorized.BatchIterator
+import org.apache.spark.sql.util.ArrowUtils
 
 /**
  * Performs a sort merge join of two child relations.
  */
 class ColumnarSortMergeJoin(
     prober: ExpressionEvaluator,
+    build_input_arrow_schema: Schema,
     stream_input_arrow_schema: Schema,
     output_arrow_schema: Schema,
     leftKeys: Seq[Expression],
@@ -110,9 +109,43 @@ class ColumnarSortMergeJoin(
       }
       build_cb = realbuildIter.next()
       val beforeBuild = System.nanoTime()
+      val projectedBuildKeyCols: List[ArrowWritableColumnVector] = if (buildProjector != null) {
+        val builderOrdinalList = buildProjector.getOrdinalList()
+        val builderAttributes = buildProjector.output()
+        val builderProjectCols = builderOrdinalList.map(i => {
+          build_cb.column(i).asInstanceOf[ArrowWritableColumnVector]
+        })
+        buildProjector.evaluate(build_cb.numRows, builderProjectCols.map(_.getValueVector()))
+      } else {
+        List[ArrowWritableColumnVector]()
+      }
+      val buildCols = (0 until build_cb.numCols).toList.map(i =>
+        build_cb.column(i).asInstanceOf[ArrowWritableColumnVector]) ::: projectedBuildKeyCols
+      val build_rb =
+        ConverterUtils.createArrowRecordBatch(build_cb.numRows, buildCols.map(_.getValueVector))
+
+      buildCols.indices.toList.foreach(i =>
+        buildCols(i).retain())
+      inputBatchHolder += build_cb
+      prober.evaluate(build_rb)
+      prepareTime += NANOSECONDS.toMillis(System.nanoTime() - beforeBuild)
+      ConverterUtils.releaseArrowRecordBatch(build_rb)
+      projectedBuildKeyCols.foreach(v => v.close())
+    }
+    if (build_cb != null) {
+      build_cb = null
+    } else {
+      if ((joinType == LeftOuter || joinType == RightOuter) && realstreamIter.hasNext) {
+        // If stream side still has next batch, an empty batch is assigned to build side.
+        val resultColumnVectors = ArrowWritableColumnVector
+          .allocateColumns(0, ArrowUtils.fromArrowSchema(build_input_arrow_schema))
+          .toArray
+        build_cb =
+          new ColumnarBatch(resultColumnVectors.map(_.asInstanceOf[ColumnVector]), 0)
+        val beforeBuild = System.nanoTime()
         val projectedBuildKeyCols: List[ArrowWritableColumnVector] = if (buildProjector != null) {
-          val builderOrdinalList = buildProjector.getOrdinalList
-          val builderAttributes = buildProjector.output
+          val builderOrdinalList = buildProjector.getOrdinalList()
+          val builderAttributes = buildProjector.output()
           val builderProjectCols = builderOrdinalList.map(i => {
             build_cb.column(i).asInstanceOf[ArrowWritableColumnVector]
           })
@@ -124,31 +157,26 @@ class ColumnarSortMergeJoin(
           build_cb.column(i).asInstanceOf[ArrowWritableColumnVector]) ::: projectedBuildKeyCols
         val build_rb =
           ConverterUtils.createArrowRecordBatch(build_cb.numRows, buildCols.map(_.getValueVector))
-
-      (0 until buildCols.size).toList.foreach(i =>
-        buildCols(i).retain())
-      inputBatchHolder += build_cb
-      prober.evaluate(build_rb)
-      prepareTime += NANOSECONDS.toMillis(System.nanoTime() - beforeBuild)
-      ConverterUtils.releaseArrowRecordBatch(build_rb)
-      projectedBuildKeyCols.foreach(v => v.close)
-    }
-    if (build_cb != null) {
-      build_cb = null
-    } else {
-      val res = new Iterator[ColumnarBatch] {
-        override def hasNext: Boolean = {
-          false
+        buildCols.indices.toList.foreach(i => buildCols(i).retain())
+        inputBatchHolder += build_cb
+        prober.evaluate(build_rb)
+        prepareTime += NANOSECONDS.toMillis(System.nanoTime() - beforeBuild)
+        ConverterUtils.releaseArrowRecordBatch(build_rb)
+        projectedBuildKeyCols.foreach(v => v.close)
+      } else {
+        val res = new Iterator[ColumnarBatch] {
+          override def hasNext: Boolean = {
+            false
+          }
+          override def next(): ColumnarBatch = {
+            val resultColumnVectors = ArrowWritableColumnVector
+              .allocateColumns(0, resultSchema)
+              .toArray
+            new ColumnarBatch(resultColumnVectors.map(_.asInstanceOf[ColumnVector]), 0)
+          }
         }
-
-        override def next(): ColumnarBatch = {
-          val resultColumnVectors = ArrowWritableColumnVector
-            .allocateColumns(0, resultSchema)
-            .toArray
-          new ColumnarBatch(resultColumnVectors.map(_.asInstanceOf[ColumnVector]), 0)
-        }
+        return res
       }
-      return res
     }
     val beforeBuild = System.nanoTime()
     probe_iterator = prober.finishByIterator()
@@ -633,6 +661,7 @@ object ColumnarSortMergeJoin extends Logging {
 
     new ColumnarSortMergeJoin(
       prober,
+      build_input_arrow_schema,
       stream_input_arrow_schema,
       output_arrow_schema,
       leftKeys,
