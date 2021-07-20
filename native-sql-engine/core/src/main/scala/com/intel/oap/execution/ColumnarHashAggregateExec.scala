@@ -279,6 +279,9 @@ case class ColumnarHashAggregateExec(
         def getResForAggregateAndGroupingLiteral: ColumnarBatch = {
           val resultColumnVectors =
             ArrowWritableColumnVector.allocateColumns(1, resultStructType)
+          for (vector <- resultColumnVectors) {
+            vector.getValueVector.setValueCount(1)
+          }
           var idx = 0
           for (exp <- groupingExpressions) {
             val out_res = exp.children.head.asInstanceOf[Literal].value
@@ -376,6 +379,9 @@ case class ColumnarHashAggregateExec(
           }
           val resultColumnVectors =
             ArrowWritableColumnVector.allocateColumns(1, resultStructType)
+          for (vector <- resultColumnVectors) {
+            vector.getValueVector.setValueCount(1)
+          }
           // If groupby is not required, for Final mode, a default value will be
           // returned if input is empty.
           var idx = 0

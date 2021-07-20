@@ -37,6 +37,7 @@
 #include "codegen/common/result_iterator.h"
 #include "jni/concurrent_map.h"
 #include "jni/jni_common.h"
+#include "operators/unsafe_row_writer_and_reader.h"
 #include "proto/protobuf_utils.h"
 #include "shuffle/splitter.h"
 
@@ -62,15 +63,22 @@ static jmethodID split_result_constructor;
 static jclass metrics_builder_class;
 static jmethodID metrics_builder_constructor;
 
+static jclass unsafe_row_class;
+static jmethodID unsafe_row_class_constructor;
+static jmethodID unsafe_row_class_point_to;
 using arrow::jni::ConcurrentMap;
 static ConcurrentMap<std::shared_ptr<arrow::Buffer>> buffer_holder_;
 
 static jint JNI_VERSION = JNI_VERSION_1_8;
 
 using CodeGenerator = sparkcolumnarplugin::codegen::CodeGenerator;
+using UnsafeRowWriterAndReader = sparkcolumnarplugin::unsaferow::UnsafeRowWriterAndReader;
 static arrow::jni::ConcurrentMap<std::shared_ptr<CodeGenerator>> handler_holder_;
 static arrow::jni::ConcurrentMap<std::shared_ptr<ResultIteratorBase>>
     batch_iterator_holder_;
+
+static arrow::jni::ConcurrentMap<std::shared_ptr<UnsafeRowWriterAndReader>>
+    unsafe_writer_and_reader_holder_;
 
 using sparkcolumnarplugin::shuffle::SplitOptions;
 using sparkcolumnarplugin::shuffle::Splitter;
@@ -199,6 +207,10 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved) {
   metrics_builder_constructor =
       GetMethodID(env, metrics_builder_class, "<init>", "([J[J)V");
 
+  unsafe_row_class = CreateGlobalClassReference(
+      env, "Lorg/apache/spark/sql/catalyst/expressions/UnsafeRow;");
+  unsafe_row_class_constructor = GetMethodID(env, unsafe_row_class, "<init>", "(I)V");
+  unsafe_row_class_point_to = GetMethodID(env, unsafe_row_class, "pointTo", "([BI)V");
   return JNI_VERSION;
 }
 
@@ -217,10 +229,12 @@ void JNI_OnUnload(JavaVM* vm, void* reserved) {
   env->DeleteGlobalRef(arrow_record_batch_builder_class);
   env->DeleteGlobalRef(serializable_obj_builder_class);
   env->DeleteGlobalRef(split_result_class);
+  env->DeleteGlobalRef(unsafe_row_class);
 
   buffer_holder_.Clear();
   handler_holder_.Clear();
   batch_iterator_holder_.Clear();
+  unsafe_writer_and_reader_holder_.Clear();
   shuffle_splitter_holder_.Clear();
   decompression_schema_holder_.Clear();
 }
@@ -1348,6 +1362,148 @@ Java_com_intel_oap_vectorized_ShuffleDecompressionJniWrapper_decompress(
 JNIEXPORT void JNICALL Java_com_intel_oap_vectorized_ShuffleDecompressionJniWrapper_close(
     JNIEnv* env, jobject, jlong schema_holder_id) {
   decompression_schema_holder_.Erase(schema_holder_id);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_intel_oap_vectorized_ArrowColumnarToRowJniWrapper_nativeConvertColumnarToRow(
+    JNIEnv* env, jobject, jbyteArray schema_arr, jint num_rows, jlongArray buf_addrs,
+    jlongArray buf_sizes, jlong memory_pool_id) {
+  if (schema_arr == NULL) {
+    env->ThrowNew(
+        illegal_argument_exception_class,
+        std::string("Native convert columnar to row schema can't be null").c_str());
+    return -1;
+  }
+  if (buf_addrs == NULL) {
+    env->ThrowNew(
+        illegal_argument_exception_class,
+        std::string("Native convert columnar to row: buf_addrs can't be null").c_str());
+    return -1;
+  }
+  if (buf_sizes == NULL) {
+    env->ThrowNew(
+        illegal_argument_exception_class,
+        std::string("Native convert columnar to row: buf_sizes can't be null").c_str());
+    return -1;
+  }
+
+  int in_bufs_len = env->GetArrayLength(buf_addrs);
+  if (in_bufs_len != env->GetArrayLength(buf_sizes)) {
+    env->ThrowNew(
+        illegal_argument_exception_class,
+        std::string(
+            "Native convert columnar to row: length of buf_addrs and buf_sizes mismatch")
+            .c_str());
+    return -1;
+  }
+
+  std::shared_ptr<arrow::Schema> schema;
+  // ValueOrDie in MakeSchema
+  MakeSchema(env, schema_arr, &schema);
+
+  jlong* in_buf_addrs = env->GetLongArrayElements(buf_addrs, JNI_FALSE);
+  jlong* in_buf_sizes = env->GetLongArrayElements(buf_sizes, JNI_FALSE);
+
+  std::shared_ptr<arrow::RecordBatch> rb;
+  auto status = MakeRecordBatch(schema, num_rows, (int64_t*)in_buf_addrs,
+                                (int64_t*)in_buf_sizes, in_bufs_len, &rb);
+
+  env->ReleaseLongArrayElements(buf_addrs, in_buf_addrs, JNI_ABORT);
+  env->ReleaseLongArrayElements(buf_sizes, in_buf_sizes, JNI_ABORT);
+
+  if (!status.ok()) {
+    env->ThrowNew(illegal_argument_exception_class,
+                  std::string("Native convert columnar to row: make record batch failed, "
+                              "error message is " +
+                              status.message())
+                      .c_str());
+    return -1;
+  }
+
+  // convert the record batch to spark unsafe row.
+  jlong result;
+  try {
+    auto* pool = reinterpret_cast<arrow::MemoryPool*>(memory_pool_id);
+    if (pool == nullptr) {
+      env->ThrowNew(illegal_argument_exception_class,
+                    "Memory pool does not exist or has been closed");
+      return -1;
+    }
+
+    std::shared_ptr<UnsafeRowWriterAndReader> unsafe_row_writer_reader =
+        std::make_shared<UnsafeRowWriterAndReader>(rb, pool);
+    auto status = unsafe_row_writer_reader->Init();
+    if (!status.ok()) {
+      env->ThrowNew(illegal_argument_exception_class,
+                    std::string("Native convert columnar to row: Init "
+                                "UnsafeRowWriterAndReader failed, error message is " +
+                                status.message())
+                        .c_str());
+      return -1;
+    }
+
+    status = unsafe_row_writer_reader->Write();
+
+    if (!status.ok()) {
+      env->ThrowNew(
+          illegal_argument_exception_class,
+          std::string("Native convert columnar to row: UnsafeRowWriterAndReader write "
+                      "failed, error message is " +
+                      status.message())
+              .c_str());
+      return -1;
+    }
+
+    result = unsafe_writer_and_reader_holder_.Insert(std::move(unsafe_row_writer_reader));
+
+  } catch (const std::runtime_error& error) {
+    env->ThrowNew(unsupportedoperation_exception_class, error.what());
+  } catch (const std::exception& error) {
+    env->ThrowNew(io_exception_class, error.what());
+  }
+
+  return result;
+}
+
+std::shared_ptr<UnsafeRowWriterAndReader> GetUnsafeRowWriterAndReader(JNIEnv* env,
+                                                                      jlong id) {
+  auto unsafe_writer_and_reader = unsafe_writer_and_reader_holder_.Lookup(id);
+  if (!unsafe_writer_and_reader) {
+    std::string error_message =
+        "invalid unsafe_writer_and_reader id" + std::to_string(id);
+    env->ThrowNew(illegal_argument_exception_class, error_message.c_str());
+  }
+  return unsafe_writer_and_reader;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_intel_oap_vectorized_ArrowColumnarToRowJniWrapper_nativeHasNext(
+    JNIEnv* env, jobject, jlong instanceID) {
+  auto unsafe_writer_and_reader = GetUnsafeRowWriterAndReader(env, instanceID);
+  return unsafe_writer_and_reader->HasNext();
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_intel_oap_vectorized_ArrowColumnarToRowJniWrapper_nativeNext(JNIEnv* env,
+                                                                      jobject,
+                                                                      jlong instanceID) {
+  auto unsafe_writer_and_reader = GetUnsafeRowWriterAndReader(env, instanceID);
+  int64_t num_cols = unsafe_writer_and_reader->GetNumCols();
+  int64_t length;
+  std::shared_ptr<arrow::ResizableBuffer> buffer;
+  unsafe_writer_and_reader->Next(&length, &buffer);
+  uint8_t* data = buffer->mutable_data();
+  // create the UnsafeRow Object
+  jobject unsafe_row =
+      env->NewObject(unsafe_row_class, unsafe_row_class_constructor, num_cols);
+
+  // convert the data to jbyteArray
+  jbyteArray byteArray = env->NewByteArray(length);
+  env->SetByteArrayRegion(byteArray, 0, length, reinterpret_cast<const jbyte*>(data));
+  // call the pointer to method to pointer the byte array
+  env->CallVoidMethod(unsafe_row, unsafe_row_class_point_to, byteArray, length);
+
+  return unsafe_row;
 }
 
 JNIEXPORT void JNICALL Java_com_intel_oap_tpc_MallocUtils_mallocTrim(JNIEnv* env,

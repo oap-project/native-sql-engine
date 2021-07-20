@@ -71,6 +71,9 @@ class ColumnarPluginConfig(conf: SQLConf) extends Logging {
   val enableColumnarShuffledHashJoin: Boolean =
     conf.getConfString("spark.oap.sql.columnar.shuffledhashjoin", "true").toBoolean && enableCpu
 
+  val enableArrowColumnarToRow: Boolean =
+    conf.getConfString("spark.oap.sql.columnar.columnartorow", "true").toBoolean && enableCpu
+
   // enable or disable columnar sortmergejoin
   // this should be set with preferSortMergeJoin=false
   val enableColumnarSortMergeJoin: Boolean =

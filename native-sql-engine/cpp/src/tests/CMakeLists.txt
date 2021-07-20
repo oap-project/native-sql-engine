@@ -8,4 +8,5 @@ package_add_test(TestArrowComputeWSCG arrow_compute_test_wscg.cc)
 package_add_test(TestArrowComputeJoinWOCG arrow_compute_test_join_wocg.cc)
 package_add_test(TestShuffleSplit shuffle_split_test.cc)
 package_add_test(TestArrowComputeWindow arrow_compute_test_window.cc)
+package_add_test(TestUnsafeRowWriterAndReader unsaferow_test.cc)
 

@@ -19,7 +19,6 @@ package com.intel.oap
 
 import com.intel.oap.execution._
 import com.intel.oap.sql.execution.RowToArrowColumnarExec
-
 import org.apache.spark.internal.config._
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{SparkSession, SparkSessionExtensions}
@@ -35,6 +34,7 @@ import org.apache.spark.sql.execution.joins._
 import org.apache.spark.sql.execution.python.{ArrowEvalPythonExec, ColumnarArrowEvalPythonExec}
 import org.apache.spark.sql.execution.window.WindowExec
 import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.types.CalendarIntervalType
 
 case class ColumnarPreOverrides() extends Rule[SparkPlan] {
   val columnarConf: ColumnarPluginConfig = ColumnarPluginConfig.getSessionConf
@@ -305,7 +305,18 @@ case class ColumnarPostOverrides() extends Rule[SparkPlan] {
       val children = r.children.map(c =>
         c match {
           case c: ColumnarToRowExec =>
-            c.withNewChildren(c.children.map(replaceWithColumnarPlan))
+            if (columnarConf.enableArrowColumnarToRow) {
+              try {
+                val child = replaceWithColumnarPlan(c.child)
+                ArrowColumnarToRowExec(child)
+              } catch {
+                case _: Throwable =>
+                  logInfo("ArrowColumnarToRow : Falling back to ColumnarToRow...")
+                  c.withNewChildren(c.children.map(replaceWithColumnarPlan))
+              }
+            } else {
+              c.withNewChildren(c.children.map(replaceWithColumnarPlan))
+            }
           case other =>
             replaceWithColumnarPlan(other)
         })
